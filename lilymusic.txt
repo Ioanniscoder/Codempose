@@ -1,0 +1,73 @@
+\\version "2.24.4"
+
+% --- Quick Primer for LilyPond Notation ---
+
+% 1. Notes and Pitches
+%   - Notes are written with letters: c d e f g a b
+%   - Accidentals: cis = C♯, des = D♭, ees = E♭, fis = F♯, ges = G♭, ais = A♯, bes = B♭
+%   - Octaves: relative to middle C (c')
+%       c   = C below middle C
+%       c'  = Middle C
+%       c'' = C one octave above middle C
+%       c,  = C one octave below middle C
+%   Example: e' = E above middle C, b, = B below middle C
+
+% 2. Durations
+%   - Written as numbers after the note:
+%       1 = whole note
+%       2 = half note
+%       4 = quarter note
+%       8 = eighth note
+%       16 = sixteenth note
+%   - Add a dot for dotted rhythms:
+%       2. = dotted half, 4. = dotted quarter
+%   Example: e4 = E quarter note, b2. = B dotted half note
+
+% 3. Bars and Rests
+%   - Bar line is inserted automatically when the time signature is full.
+%   - Rests are written with r + duration:
+%       r4 = quarter rest, r2. = dotted half rest
+
+% 4. Intervals and Octave Movement
+%   - LilyPond guesses the octave based on the closest step.
+%   - Use apostrophes (') to go up octaves, commas (,) to go down.
+%   Example: c'4 e g = C major triad in root position.
+
+% 5. Chords
+%   - Chords are enclosed in < > with notes inside, followed by duration:
+%       <c' e' g'>4 = C major chord as quarter note
+%       <f a c'>2. = F major chord as dotted half
+
+% 6. Relative vs Absolute Mode
+%   - With \\relative, you give LilyPond a reference pitch and it fills in closest octaves.
+%       Example: \\relative c' { c4 e g c }
+%   - With absolute pitches, you must specify octave marks on each note.
+
+% --- Example Melody with Chords ---
+\\score {
+  <<
+    \\new Staff {
+      \\clef treble
+      \\key c \\major
+      \\time 4/4
+
+      % Melody: E4 quarter, B3 dotted half
+      \\relative c' {
+        e4 b,2. |
+        c4 d4 e2 |
+      }
+    }
+
+    \\new Staff {
+      \\clef bass
+      \\key c \\major
+      \\time 4/4
+
+      % Chords in bass
+      <c e g>1 |
+      <f a c'>1 |
+    }
+  >>
+  \\layout { }
+  \\midi { }
+}

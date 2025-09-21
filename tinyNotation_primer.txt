@@ -1,0 +1,125 @@
+tinyNotation Primer (music21)
+=============================
+
+tinyNotation is a shorthand system in music21 to quickly encode musical notes, rhythms, rests, ties, chords, and time signatures.
+
+---
+Basic Notes
+-----------
+- Write the pitch name followed by duration.
+- Examples:
+  "c4" = quarter note C
+  "d8" = eighth note D
+  "g2" = half note G
+  "a1" = whole note A
+
+Octaves:
+- Middle C is "c'".
+- One octave lower = "c"
+- Two octaves lower = "c,"
+- One octave higher = "c''"
+
+---
+Durations
+----------
+1  = whole note
+2  = half note
+4  = quarter note
+8  = eighth note
+16 = sixteenth note
+
+Examples:
+  "c4 d4 e4 f4" = four quarter notes
+
+---
+Rests
+------
+Use "r" followed by duration:
+  "r4" = quarter rest
+  "r2" = half rest
+
+---
+Ties
+-----
+Use "~" between notes:
+  "c4~c4" = C tied across two quarter notes
+
+---
+Chords
+-------
+Chords are written in brackets:
+  "[c4e4g4]" = C major chord (quarter notes)
+
+---
+Time Signature
+---------------
+Use "time" keyword:
+  "3/4 c4 d4 e4 | f2 g4" = sets 3/4 time
+
+---
+Full Example
+-------------
+>>> from music21 import converter, stream
+>>> s = converter.parse("tinynotation: 4/4 c4 d4 e4 f4 g2 r2 c1")
+>>> s.show()
+
+This creates:
+- 4/4 measure
+- C-D-E-F quarter notes
+- G half note
+- Half rest
+- Whole note C
+
+---
+Chords Example
+---------------
+>>> s = converter.parse("tinynotation: 4/4 [c4e4g4] r4 [d4f4a4] r4")
+>>> s.show()
+
+This creates alternating C and D minor chords with rests.
+
+---
+Documentation
+--------------
+For complete reference, see:
+https://web.mit.edu/music21/doc/moduleReference/moduleTinyNotation.html
+
+---
+Comparison: tinyNotation vs LilyPond
+-----------------------------------
+
+Both tinyNotation (music21) and LilyPond are text-based systems to encode music, but they differ in syntax and purpose.
+
+1. **Notes**
+   - tinyNotation: "c4 d4 e4 f4"
+   - LilyPond: "c'4 d'4 e'4 f'4"
+
+   (Note: LilyPond uses apostrophes for octaves, tinyNotation uses apostrophes and commas as well but relative to middle C.)
+
+2. **Rests**
+   - tinyNotation: "r4"
+   - LilyPond: "r4"
+
+   (Same in both.)
+
+3. **Chords**
+   - tinyNotation: "[c4e4g4]"
+   - LilyPond: "<c' e' g'>4"
+
+4. **Time Signatures**
+   - tinyNotation: "4/4 c4 d4 e4 f4"
+   - LilyPond:
+     \time 4/4
+     c'4 d'4 e'4 f'4
+
+5. **Ties**
+   - tinyNotation: "c4~c4"
+   - LilyPond: "c'4 ~ c'4"
+
+---
+Summary
+-------
+- tinyNotation is simpler and good for fast input or algorithmic composition in Python.
+- LilyPond is more detailed, precise, and suited for engraving high-quality sheet music.
+- You can use music21 to parse tinyNotation and then export to LilyPond (.ly) if you need publication-ready scores.
+

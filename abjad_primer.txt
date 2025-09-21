@@ -1,0 +1,96 @@
+Abjad Primer (for music21 + LilyPond Hybrid)
+============================================
+
+Abjad is a Python API for building LilyPond files. You build a score as Python objects, 
+and Abjad outputs .ly files for LilyPond to engrave.
+
+------------------------------------------------------------
+1. Core Concepts
+------------------------------------------------------------
+- Notes and Duration:
+  import abjad
+  note = abjad.Note("c'4")        # quarter note C
+  rest = abjad.Rest("r2")         # half rest
+  chord = abjad.Chord("<c' e' g'>2")  # half-note C major chord
+
+- Containers:
+  voice = abjad.Voice("c'4 d'4 e'4 f'4")
+  staff = abjad.Staff([voice])
+  score = abjad.Score([staff])
+
+Hierarchy:
+  Score
+   └── StaffGroup (PianoStaff, ChoirStaff, etc.)
+        ├── Staff
+        │    └── Voice
+        │         └── Notes, Chords, Rests
+
+------------------------------------------------------------
+2. Attaching Musical Marks
+------------------------------------------------------------
+Abjad uses attach() to add musical symbols:
+
+  leaf0 = abjad.select.leaf(voice, 0)  # first note
+  abjad.attach(abjad.Clef("treble"), leaf0)
+  abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
+  abjad.attach(abjad.KeySignature(abjad.NamedPitchClass("c"), abjad.Mode("major")), leaf0)
+  abjad.attach(abjad.MetronomeMark(abjad.Duration(1, 4), 100), leaf0)
+
+------------------------------------------------------------
+3. Durations and Conversion
+------------------------------------------------------------
+- Abjad has its own Duration class.
+- Example:
+
+  from fractions import Fraction
+  dur = abjad.Duration(Fraction(1, 4))   # quarter note
+  print(dur.lilypond_duration_string())  # '4'
+
+In your code: music21 quarterLength → Abjad Duration → LilyPond string.
+
+------------------------------------------------------------
+4. Pitch Handling
+------------------------------------------------------------
+- Abjad can create pitches from strings or NamedPitch:
+
+  p = abjad.NamedPitch("c'")
+  print(abjad.lilypond(p))   # "c'"
+
+In your code: music21.pitch.Pitch → Abjad.NamedPitch → LilyPond.
+
+------------------------------------------------------------
+5. Export and Persist
+------------------------------------------------------------
+Normal pipeline:
+
+  file = abjad.LilyPondFile(items=[score])
+  abjad.persist.as_ly(file, "output.ly")
+
+Then compile with LilyPond:
+  lilypond output.ly
+
+In your script: subprocess.run(["lilypond", str(ly_path)])
+
+------------------------------------------------------------
+6. Typical Workflow in Your Script
+------------------------------------------------------------
+1. Parse LilyPond → music21.stream.Part (handles relative mode, chords).
+2. Transform with music21 (transpose, analysis, etc.).
+3. Convert to Abjad (Notes, Chords, Rests).
+4. Build Voices and Staves with Abjad.
+5. Attach Clef, Time Signature, Key, Tempo.
+6. Export .ly file and engrave with LilyPond.
+
+------------------------------------------------------------
+7. Why Abjad?
+------------------------------------------------------------
+- Precise control of LilyPond output.
+- Hierarchical modeling of scores.
+- Bridges music21 analysis with LilyPond engraving.
+- Good for algorithmic composition and professional-quality output.
+
+------------------------------------------------------------
+Documentation
+------------------------------------------------------------
+- Abjad User Guide: https://abjad.github.io/
+- API Reference: https://abjad.github.io/api/
