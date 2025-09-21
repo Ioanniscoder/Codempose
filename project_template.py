@@ -62,10 +62,12 @@ def _parse_absolute_block(snippet: str) -> music21.stream.Part:
     for tok in tokens:
         if tok.startswith("<"):
             element = _parse_chord_token(tok)
-            if element: part.append(element)
+            if element:
+                part.append(element)
         else:
             element = _parse_note_token(tok)
-            if element: part.append(element)
+            if element:
+                part.append(element)
     return part
 
 def _resolve_relative(tok: str, last_pitch: music21.pitch.Pitch, ql: float = None):
@@ -134,8 +136,11 @@ def m21_pitch_to_lily(p: music21.pitch.Pitch) -> str:
     return abjad.lilypond(abjad.NamedPitch(p.nameWithOctave))
 
 def engrave_with_abjad(parts: dict, output_file: str):
+    # Convert each provided music21 Part into an Abjad Voice (if it contains tokens)
     voices = {}
     for name, part in parts.items():
+        if part is None:
+            continue
         tokens = []
         for el in part.flatten().notesAndRests:
             if isinstance(el, music21.chord.Chord):
@@ -149,26 +154,43 @@ def engrave_with_abjad(parts: dict, output_file: str):
                 dur_str = ql_to_lily_duration_string(el.quarterLength)
                 tokens.append(f"r{dur_str}")
 
-        voices[name] = abjad.Voice(" ".join(tokens), name=name)
+        token_text = " ".join(tokens).strip()
+        if token_text:
+            voices[name] = abjad.Voice(token_text, name=name)
 
-    melody_staff = abjad.Staff([voices.get("Melody")], name="Melody")
-    harmony_staff = abjad.Staff([voices.get("Harmony")], name="Harmony")
+    if not voices:
+        raise RuntimeError("No musical parts provided to engrave_with_abjad")
 
-    if melody_staff and abjad.select.leaf(melody_staff, 0):
-        leaf0 = abjad.select.leaf(melody_staff, 0)
-        abjad.attach(abjad.Clef("treble"), leaf0)
-        abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
-        abjad.attach(abjad.KeySignature(abjad.NamedPitchClass("c"), abjad.Mode("major")), leaf0)
-        abjad.attach(abjad.MetronomeMark(abjad.Duration(1, 4), 100), leaf0)
+    # Create Abjad Staffs for each voice and attach basic directives
+    staffs = []
+    for idx, (name, voice) in enumerate(voices.items()):
+        staff = abjad.Staff([voice], name=name)
+        staffs.append(staff)
+        try:
+            if abjad.select.leaf(staff, 0):
+                leaf0 = abjad.select.leaf(staff, 0)
+                # first staff: add treble clef, key/time/metronome
+                if idx == 0:
+                    abjad.attach(abjad.Clef("treble"), leaf0)
+                    abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
+                    abjad.attach(abjad.KeySignature(abjad.NamedPitchClass("c"), abjad.Mode("major")), leaf0)
+                    abjad.attach(abjad.MetronomeMark(abjad.Duration(1, 4), 100), leaf0)
+                # if name suggests harmony, use bass clef
+                elif "harmony" in name.lower() or "bass" in name.lower():
+                    abjad.attach(abjad.Clef("bass"), leaf0)
+                    abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
+        except Exception:
+            # keep going even if attachments fail
+            pass
 
-    if harmony_staff and abjad.select.leaf(harmony_staff, 0):
-        leaf0h = abjad.select.leaf(harmony_staff, 0)
-        abjad.attach(abjad.Clef("bass"), leaf0h)
-        abjad.attach(abjad.TimeSignature((4, 4)), leaf0h)
+    # Build score: single staff => Score(staff), multiple => StaffGroup
+    if len(staffs) == 1:
+        score = abjad.Score(staffs)
+    else:
+        score = abjad.Score([abjad.StaffGroup(staffs, lilypond_type="PianoStaff")])
 
-    score = abjad.Score([abjad.StaffGroup([melody_staff, harmony_staff], lilypond_type="PianoStaff")])
     header = abjad.Block(name="header", items=[
-        'title = "Relative LilyPond Parser (Chords Preserved)"',
+        f'title = "{output_file} (generated)"',
         'composer = "Python + music21 + Abjad"',
     ])
     lyfile = abjad.LilyPondFile(items=[header, score])
