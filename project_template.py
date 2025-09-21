@@ -27,6 +27,31 @@ def parse_lilypond_snippet(snippet: str) -> music21.stream.Part:
         return _parse_relative_block(base, body)
     return _parse_absolute_block(snippet)
 
+
+def parse_snippet(snippet: str, kind: str = 'lily') -> music21.stream.Part:
+    """
+    Parse a snippet which can be either a LilyPond fragment (default) or
+    music21 tinyNotation. Use kind='tinynotation' to parse tinyNotation.
+    """
+    if kind and kind.lower().startswith('tiny'):
+        # parse tinyNotation via music21 converter
+        try:
+            from music21 import converter
+            s = converter.parse(snippet)
+            # return the first Part or the stream itself
+            if isinstance(s, music21.stream.Score) and s.parts:
+                return s.parts[0]
+            if isinstance(s, music21.stream.Part):
+                return s
+            # fallback: wrap in Part
+            p = music21.stream.Part()
+            p.append(s.flatten())
+            return p
+        except Exception:
+            raise
+    # default: lilypond-like parsing
+    return parse_lilypond_snippet(snippet)
+
 def _get_tokens(body: str):
     """THE FIX: Use a robust regex to find all musical tokens."""
     token_regex = r"<[^>]+>\d*\.?|[a-gr][eis]*[,']*\d*\.?|\|"
@@ -135,7 +160,7 @@ def ql_to_lily_duration_string(ql: float) -> str:
 def m21_pitch_to_lily(p: music21.pitch.Pitch) -> str:
     return abjad.lilypond(abjad.NamedPitch(p.nameWithOctave))
 
-def engrave_with_abjad(parts: dict, output_file: str):
+def engrave_with_abjad(parts: dict, output_file: str, midi_programs: dict = None):
     # Convert each provided music21 Part into an Abjad Voice (if it contains tokens)
     voices = {}
     for name, part in parts.items():
@@ -164,7 +189,34 @@ def engrave_with_abjad(parts: dict, output_file: str):
     # Create Abjad Staffs for each voice and attach basic directives
     staffs = []
     for idx, (name, voice) in enumerate(voices.items()):
+        # Create staff; if user provided a midi_program, attach a lilypond literal
+        # that sets the Staff.midiInstrument (LilyPond 2.20+ syntax) or uses
+        # \set Staff.midiInstrument for compatibility.
         staff = abjad.Staff([voice], name=name)
+        if midi_programs and name in midi_programs:
+            prog = midi_programs[name]
+            # If an integer is provided, map common GM program numbers to names.
+            gm_map = {
+                0: 'acoustic grand piano',
+                1: 'bright acoustic piano',
+                24: 'nylon acoustic guitar',
+                32: 'acoustic bass',
+                40: 'violin',
+                48: 'string ensemble 1',
+            }
+            if isinstance(prog, int):
+                name_for_lily = gm_map.get(prog, 'acoustic grand piano')
+            else:
+                # allow providing a LilyPond instrument name directly
+                name_for_lily = str(prog)
+            # create a LilyPond literal to set the Staff MIDI instrument
+            literal = abjad.LilyPondLiteral(f'\\set Staff.midiInstrument = #"{name_for_lily}"')
+            try:
+                leaf0 = abjad.select.leaf(staff, 0)
+                abjad.attach(literal, leaf0)
+            except Exception:
+                # best-effort: if attaching fails, skip
+                pass
         staffs.append(staff)
         try:
             if abjad.select.leaf(staff, 0):
@@ -193,12 +245,37 @@ def engrave_with_abjad(parts: dict, output_file: str):
         f'title = "{output_file} (generated)"',
         'composer = "Python + music21 + Abjad"',
     ])
-    lyfile = abjad.LilyPondFile(items=[header, score])
+    # Wrap the generated score in a \score block that includes
+    # both \layout and \midi blocks so editors like Frescobaldi can
+    # produce MIDI directly from the .ly file.
+    # We'll create a small snippet for \layout and \midi and then
+    # include the score object itself as the musical material.
+    layout_block = abjad.Block(name="layout", items=[
+        '% layout settings: use defaults, but keep block so Frescobaldi shows engraving options'
+    ])
+
+    # Provide a basic \midi block that sets a simple tempo mark and enables
+    # automatic MIDI generation for each staff. Use a raw string for the tempo
+    # so that '\\t' sequences aren't interpreted as tab characters.
+    midi_block = abjad.Block(name="midi", items=[
+        r'\tempo 4 = 100',
+        '% Default MIDI settings - adjust instruments/positions as needed'
+    ])
+
+    # Wrap the musical Score together with layout and midi into a top-level \score
+    # block. This ensures LilyPond sees the music plus layout and midi blocks
+    # together and editors like Frescobaldi can generate MIDI from the .ly file.
+    score_block = abjad.Block(name="score", items=[score, layout_block, midi_block])
+
+    lyfile = abjad.LilyPondFile(items=[header, score_block])
 
     ly_path = Path(output_file).with_suffix(".ly")
     abjad.persist.as_ly(lyfile, ly_path)
-    print(f"Compiling {ly_path} with LilyPond...")
+    print(f"Wrote LilyPond file: {ly_path}")
+    print(f"Compiling {ly_path} with LilyPond (PDF output)...")
     subprocess.run(["lilypond", str(ly_path)])
+    # Attempt to also invoke lilypond's "-dbackend=audiveris" or other midi-producing flags
+    # is not necessary here because Frescobaldi will read the .ly and generate MIDI.
 
 # ==============================
 # Demo / main
