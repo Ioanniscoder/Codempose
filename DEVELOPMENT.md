@@ -32,6 +32,18 @@ python3 -m http.server 8888 --bind 0.0.0.0
 
 Then forward port 8888 in the Ports view (make it Public) and click the forwarded URL. Open `relative_score.pdf` in the browser.
 
+## Composer helper
+
+Use `src/composer.py` as a template-based entrypoint to create LilyPond and PDF files programmatically.
+
+Example:
+
+```bash
+python -m src.composer --melody "\\relative c' { e4 f g a <c e g>2. r4 }" --harmony "c,2 g,2 <c e g>1" --output my_score
+```
+
+This will create `my_score.ly` and `my_score.pdf` (via Abjad/LilyPond) and can be used as the basis for composing automation.
+
 ## Notes
 - `lilypond` is installed in the devcontainer image via the Dockerfile. Rebuild the container to pick up the change.
 - If you want me to add a small `Makefile` or a convenience script (`run.sh`) to automate run → build → open, tell me and I’ll add it.
