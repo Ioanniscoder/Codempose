@@ -47,3 +47,8 @@ This will create `my_score.ly` and `my_score.pdf` (via Abjad/LilyPond) and can b
 ## Notes
 - `lilypond` is installed in the devcontainer image via the Dockerfile. Rebuild the container to pick up the change.
 - If you want me to add a small `Makefile` or a convenience script (`run.sh`) to automate run → build → open, tell me and I’ll add it.
+
+## CI and Git LFS notes
+
+- The Dockerfile now installs `git-lfs` so pushes from within Codespaces will work for repositories that use LFS. If you still push from a local machine, ensure `git-lfs` is installed there as well.
+- A GitHub Actions workflow `devcontainer-ci.yml` was added to build the devcontainer image and run the demo (`project_template.py`) on pull requests. The generated `relative_score.pdf` is uploaded as a workflow artifact for inspection.

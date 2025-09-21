@@ -1,0 +1,24 @@
+name: Devcontainer Build & Demo
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Build devcontainer image
+        run: |
+          docker build -f .devcontainer/Dockerfile -t codempose-devcontainer .
+      - name: Run container and execute demo
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/workspaces/Codempose -w /workspaces/Codempose codempose-devcontainer /bin/bash -c "pip install -r requirements.txt && python3 project_template.py"
+      - name: Upload generated PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: relative_score-pdf
+          path: relative_score.pdf
