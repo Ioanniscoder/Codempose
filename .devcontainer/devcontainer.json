@@ -5,5 +5,6 @@
   },
   "workspaceFolder": "/workspaces/Codempose",
   "forwardPorts": [8888],
-  "postCreateCommand": "pip install -r requirements.txt"
+  "postCreateCommand": "pip install -r requirements.txt",
+  "postStartCommand": "bash .devcontainer/devcontainer-start.sh"
 }

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Small composer helper: public API + CLI to create LilyPond and PDF outputs.
 
-This module tries to use an external `make21` package if available; otherwise it
-falls back to the parsing/engraving functions already in `project_template.py`.
+This module tries to use an external `make21` package if available; otherwise
+it falls back to the parsing/engraving functions already in
+`project_template.py`.
 
 Usage:
   python -m src.composer --melody "\\relative c' { e4 f g a }" --harmony "c,2 g,2"
@@ -24,10 +25,13 @@ except Exception:
     HAVE_MAKE21 = False
 
 
+logger = logging.getLogger("composer")
+
+
 def create_score_from_snippets(melody_snippet: str, harmony_snippet: str, output_basename: str = "score") -> Path:
     """Create a LilyPond file and invoke engraving to produce a PDF.
 
-    Returns the path to the generated PDF.
+    Returns the path to the generated PDF. Raises RuntimeError on failure.
     """
     # Lazy import of project_template functions to reuse existing logic
     from project_template import parse_lilypond_snippet, engrave_with_abjad
@@ -35,8 +39,14 @@ def create_score_from_snippets(melody_snippet: str, harmony_snippet: str, output
     melody = parse_lilypond_snippet(melody_snippet)
     harmony = parse_lilypond_snippet(harmony_snippet)
     output_file = f"{output_basename}"
-    engrave_with_abjad({"Melody": melody, "Harmony": harmony}, output_file)
+    try:
+        engrave_with_abjad({"Melody": melody, "Harmony": harmony}, output_file)
+    except Exception as exc:
+        logger.exception("Failed to engrave with Abjad/lilypond: %s", exc)
+        raise RuntimeError("engrave_with_abjad failed") from exc
     pdf_path = Path(output_file).with_suffix(".pdf")
+    if not pdf_path.exists():
+        raise RuntimeError(f"Expected PDF not created: {pdf_path}")
     return pdf_path
 
 
@@ -53,8 +63,7 @@ def create_score_from_make21(obj, output_basename: str = "score") -> Path:
     lily_text = make21.to_lilypond(obj)  # type: ignore
     ly_path = Path(output_basename).with_suffix(".ly")
     ly_path.write_text(lily_text)
-    # Attempt to invoke lilypond via system; let Abjad handle compiling if needed.
-    # For now, return the expected PDF path.
+    # Return the PDF path expected after engraving
     return ly_path.with_suffix(".pdf")
 
 
@@ -66,19 +75,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO)
-    if HAVE_MAKE21:
-        logging.info("Using Make21 to create score")
-        # Example: convert some Make21 object; here we don't have one so fallback
-        try:
-            pdf = create_score_from_make21(None, args.output)
-            logging.info(f"Generated PDF: {pdf}")
-            return 0
-        except Exception as exc:
-            logging.warning("Make21 path failed, falling back: %s", exc)
+    logger.info("Composer starting; HAVE_MAKE21=%s", HAVE_MAKE21)
 
-    pdf = create_score_from_snippets(args.melody, args.harmony, args.output)
-    logging.info(f"Generated PDF: {pdf}")
-    return 0
+    try:
+        if HAVE_MAKE21:
+            logger.info("Using Make21 to create score")
+            try:
+                pdf = create_score_from_make21(None, args.output)
+                logger.info("Generated PDF via make21: %s", pdf)
+                return 0
+            except Exception as exc:
+                logger.warning("Make21 path failed, falling back: %s", exc)
+
+        pdf = create_score_from_snippets(args.melody, args.harmony, args.output)
+        logger.info("Generated PDF: %s", pdf)
+        return 0
+
+    except RuntimeError as exc:
+        logger.error("Composer failed: %s", exc)
+        return 2
+    except Exception as exc:  # pragma: no cover - unexpected errors
+        logger.exception("Unexpected error in composer: %s", exc)
+        return 3
 
 
 if __name__ == "__main__":

@@ -127,7 +127,8 @@ def _parse_chord_token(tok: str, last_pitch: music21.pitch.Pitch = None):
 # ==============================
 def ql_to_lily_duration_string(ql: float) -> str:
     dur = abjad.Duration(Fraction(ql / 4))
-    return dur.lilypond_duration_string()
+    # abjad.Duration.lilypond_duration_string is a string property, not a callable
+    return dur.lilypond_duration_string
 
 def m21_pitch_to_lily(p: music21.pitch.Pitch) -> str:
     return abjad.lilypond(abjad.NamedPitch(p.nameWithOctave))
