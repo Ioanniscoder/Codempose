@@ -1,6 +1,8 @@
 {
   "name": "Codempose - Python",
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.11",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "workspaceFolder": "/workspaces/Codempose",
   "forwardPorts": [8888],
   "postCreateCommand": "pip install -r requirements.txt"
