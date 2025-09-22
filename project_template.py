@@ -195,8 +195,20 @@ def engrave_with_abjad(parts: dict, output_file: str):
     ])
     lyfile = abjad.LilyPondFile(items=[header, score])
 
+    # Render the LilyPond text and ensure it's wrapped in a \score block
+    # that contains a \layout and \midi block so LilyPond will produce MIDI.
+    ly_text = abjad.lilypond(lyfile)
+    # Find the score start (\new Score ...) and wrap it in a full \score { ... }
+    idx = ly_text.find("\\new Score")
+    if idx != -1:
+        wrapped = ly_text[:idx] + "\\score {\n" + ly_text[idx:]
+        wrapped += "\n\\layout { }\n\\midi { }\n}\n"
+    else:
+        # fallback: append layout/midi blocks
+        wrapped = ly_text + "\n\\layout { }\n\\midi { }\n"
+
     ly_path = Path(output_file).with_suffix(".ly")
-    abjad.persist.as_ly(lyfile, ly_path)
+    ly_path.write_text(wrapped)
     print(f"Compiling {ly_path} with LilyPond...")
     subprocess.run(["lilypond", str(ly_path)])
 
