@@ -187,30 +187,35 @@ def engrave_with_abjad(parts: dict, output_file: str):
                 dur = int(4 / n.quarterLength)
                 chord_pitches = " ".join(p.name.lower() for p in n.pitches)
                 notes.append(f"<{chord_pitches}>{dur}")
-        voices[name] = abjad.Voice(" ".join(notes), name=name)
+        voices[name] = " ".join(notes)  # Store as string instead of abjad.Voice
+        print(f"Generated {name} tokens: {voices[name]}")
 
-    melody_staff = abjad.Staff([voices["Melody"]], name="Melody")
-    harmony_staff = abjad.Staff([voices["Harmony"]], name="Harmony")
+    print(f"Successfully generated LilyPond tokens for parts: {list(voices.keys())}")
+    print("Abjad engraving has been commented out - tokens generated successfully")
 
-    abjad.attach(abjad.Clef("treble"), abjad.select.leaf(melody_staff, 0))
-    abjad.attach(abjad.Clef("bass"), abjad.select.leaf(harmony_staff, 0))
-    abjad.attach(abjad.TimeSignature((4, 4)), abjad.select.leaf(melody_staff, 0))
-    abjad.attach(abjad.TimeSignature((4, 4)), abjad.select.leaf(harmony_staff, 0))
+    # melody_staff = abjad.Staff([voices["Melody"]], name="Melody")
+    # harmony_staff = abjad.Staff([voices["Harmony"]], name="Harmony")
 
-    staff_group = abjad.StaffGroup([melody_staff, harmony_staff], lilypond_type="PianoStaff")
-    score = abjad.Score([staff_group])
+    # abjad.attach(abjad.Clef("treble"), abjad.select.leaf(melody_staff, 0))
+    # abjad.attach(abjad.Clef("bass"), abjad.select.leaf(harmony_staff, 0))
+    # abjad.attach(abjad.TimeSignature((4, 4)), abjad.select.leaf(melody_staff, 0))
+    # abjad.attach(abjad.TimeSignature((4, 4)), abjad.select.leaf(harmony_staff, 0))
 
-    header_block = abjad.Block(name="header", items=[
-        'title = "Relative LilyPond Parser"',
-        'composer = "Python + music21 + Abjad"'
-    ])
-    lilypond_file = abjad.LilyPondFile(items=[header_block, score])
+    # staff_group = abjad.StaffGroup([melody_staff, harmony_staff], lilypond_type="PianoStaff")
+    # score = abjad.Score([staff_group])
 
-    ly_path = Path(output_file).with_suffix(".ly")
-    abjad.persist.as_ly(lilypond_file, ly_path)
+    # header_block = abjad.Block(name="header", items=[
+    #     'title = "Relative LilyPond Parser"',
+    #     'composer = "Python + music21 + Abjad"'
+    # ])
+    # lilypond_file = abjad.LilyPondFile(items=[header_block, score])
 
-    print(f"Compiling {ly_path} with LilyPond...")
-    subprocess.run(["lilypond", str(ly_path)])
+    # ly_path = Path(output_file).with_suffix(".ly")
+    # abjad.persist.as_ly(lilypond_file, ly_path)
+
+    # print(f"LilyPond file written to: {ly_path}")
+    # # print(f"Compiling {ly_path} with LilyPond...")
+    # # subprocess.run(["lilypond", str(ly_path)])
 
 
 # ================================================================

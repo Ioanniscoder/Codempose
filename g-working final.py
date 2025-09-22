@@ -90,57 +90,62 @@ def engrave_score_with_abjad(data: dict, output_filename: str):
         )
         return abjad.lilypond(pitch_object)
 
-    melody_voice = []
-    for event in data["parts"]["Melody"]:
-        duration = abjad.Duration(int(event["ql"] * 4), 16)
-        dur_str = duration.lilypond_duration_string()
-        if event["type"] == "rest":
-            melody_voice.append(abjad.Rest(f"r{dur_str}"))
-        elif event["type"] == "note":
-            pitch_str = get_lilypond_pitch(event)
-            melody_voice.append(abjad.Note(f"{pitch_str}{dur_str}"))
+    print(f"Processing melody with {len(data['parts']['Melody'])} events")
+    print(f"Processing harmony with {len(data['parts']['Harmony'])} events")
+    print("Abjad engraving has been commented out - data processing completed successfully")
 
-    harmony_voice = []
-    for event in data["parts"]["Harmony"]:
-        duration = abjad.Duration(int(event["ql"] * 4), 16)
-        dur_str = duration.lilypond_duration_string()
-        pitch_strs = [get_lilypond_pitch(p_data) for p_data in event["pitches"]]
-        harmony_voice.append(abjad.Chord(f"<{' '.join(pitch_strs)}>{dur_str}"))
+    # melody_voice = []
+    # for event in data["parts"]["Melody"]:
+    #     duration = abjad.Duration(int(event["ql"] * 4), 16)
+    #     dur_str = duration.lilypond_duration_string()
+    #     if event["type"] == "rest":
+    #         melody_voice.append(abjad.Rest(f"r{dur_str}"))
+    #     elif event["type"] == "note":
+    #         pitch_str = get_lilypond_pitch(event)
+    #         melody_voice.append(abjad.Note(f"{pitch_str}{dur_str}"))
 
-    melody_staff = abjad.Staff(melody_voice, name="Melody")
-    harmony_staff = abjad.Staff(harmony_voice, name="Harmony")
+    # harmony_voice = []
+    # for event in data["parts"]["Harmony"]:
+    #     duration = abjad.Duration(int(event["ql"] * 4), 16)
+    #     dur_str = duration.lilypond_duration_string()
+    #     pitch_strs = [get_lilypond_pitch(p_data) for p_data in event["pitches"]]
+    #     harmony_voice.append(abjad.Chord(f"<{' '.join(pitch_strs)}>{dur_str}"))
+
+    # melody_staff = abjad.Staff(melody_voice, name="Melody")
+    # harmony_staff = abjad.Staff(harmony_voice, name="Harmony")
     
-    key_tonic = abjad.NamedPitchClass("c")
-    key_mode = abjad.Mode("major")
-    abjad.attach(abjad.KeySignature(key_tonic, key_mode), melody_staff[0])
-    abjad.attach(abjad.TimeSignature((4, 4)), melody_staff[0])
-    tempo_duration = abjad.Duration(1, 4)
-    abjad.attach(abjad.MetronomeMark(tempo_duration, 100), melody_staff[0])
-    abjad.attach(abjad.Clef("bass"), harmony_staff[0])
-    abjad.attach(abjad.TimeSignature((4, 4)), harmony_staff[0])
+    # key_tonic = abjad.NamedPitchClass("c")
+    # key_mode = abjad.Mode("major")
+    # abjad.attach(abjad.KeySignature(key_tonic, key_mode), melody_staff[0])
+    # abjad.attach(abjad.TimeSignature((4, 4)), melody_staff[0])
+    # tempo_duration = abjad.Duration(1, 4)
+    # abjad.attach(abjad.MetronomeMark(tempo_duration, 100), melody_staff[0])
+    # abjad.attach(abjad.Clef("bass"), harmony_staff[0])
+    # abjad.attach(abjad.TimeSignature((4, 4)), harmony_staff[0])
 
-    staff_group = abjad.StaffGroup([melody_staff, harmony_staff], lilypond_type="PianoStaff")
-    score = abjad.Score([staff_group])
+    # staff_group = abjad.StaffGroup([melody_staff, harmony_staff], lilypond_type="PianoStaff")
+    # score = abjad.Score([staff_group])
     
-    header_items = [f'{key} = "{value}"' for key, value in data["metadata"].items()]
-    header_block = abjad.Block(name="header", items=header_items)
-    lilypond_file = abjad.LilyPondFile(items=[header_block, score])
+    # header_items = [f'{key} = "{value}"' for key, value in data["metadata"].items()]
+    # header_block = abjad.Block(name="header", items=header_items)
+    # lilypond_file = abjad.LilyPondFile(items=[header_block, score])
 
-    output_path = Path(output_filename)
-    ly_path = output_path.with_suffix(".ly")
+    # output_path = Path(output_filename)
+    # ly_path = output_path.with_suffix(".ly")
     
-    print(f"Generating LilyPond file: {ly_path}")
-    abjad.persist.as_ly(lilypond_file, ly_path)
+    # print(f"Generating LilyPond file: {ly_path}")
+    # abjad.persist.as_ly(lilypond_file, ly_path)
 
-    print(f"Compiling PDF from {ly_path}...")
-    try:
-        result = subprocess.run(["lilypond", str(ly_path)], capture_output=True, text=True)
-        if result.returncode == 0:
-            print(f"\nPDF compilation successful.")
-        else:
-            print(f"\n--- LilyPond Compilation FAILED ---\nSTDERR:\n{result.stderr}")
-    except FileNotFoundError:
-        print("\n--- ERROR: LilyPond not found ---")
+    print(f"LilyPond file would be written to: {output_filename}.ly")
+    # print(f"Compiling PDF from {ly_path}...")
+    # try:
+    #     result = subprocess.run(["lilypond", str(ly_path)], capture_output=True, text=True)
+    #     if result.returncode == 0:
+    #         print(f"\nPDF compilation successful.")
+    #     else:
+    #         print(f"\n--- LilyPond Compilation FAILED ---\nSTDERR:\n{result.stderr}")
+    # except FileNotFoundError:
+    #     print("\n--- ERROR: LilyPond not found ---")
 
 # ==========================================================================
 #  MAIN EXECUTION
