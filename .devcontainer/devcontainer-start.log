@@ -1,0 +1,182 @@
+Starting devcontainer start helper: Mon Sep 22 19:56:06 UTC 2025
+Generating score (project_template.py) ...
+GNU LilyPond 2.24.1 (running Guile 2.2)
+Processing `relative_score.ly'
+Parsing...
+Interpreting music...
+Preprocessing graphical objects...
+Finding the ideal number of pages...
+Fitting music on 1 page...
+Drawing systems...
+Converting to `relative_score.pdf'...
+Success: compilation successfully completed
+--- Parsing music from LilyPond strings ---
+
+--- Transforming with music21 ---
+Original melody start: E5
+Transposed melody start: B5
+
+Original melody contents:
+{0.0} <music21.note.Note E>
+{1.0} <music21.note.Note F>
+{2.0} <music21.note.Note G>
+{3.0} <music21.note.Note A>
+{4.0} <music21.chord.Chord C6 E6 G6>
+{7.0} <music21.note.Rest quarter>
+
+Transposed melody contents:
+{0.0} <music21.note.Note B>
+{1.0} <music21.note.Note C>
+{2.0} <music21.note.Note D>
+{3.0} <music21.note.Note E>
+{4.0} <music21.chord.Chord G6 B6 D7>
+{7.0} <music21.note.Rest quarter>
+
+--- Engraving with Abjad ---
+Compiling relative_score.ly with LilyPond...
+
+✅ Done.
+Generation completed successfully.
+Starting HTTP server on 0.0.0.0:8888 ...
+HTTP server started (PID 129).
+Devcontainer start helper finished: Mon Sep 22 19:56:13 UTC 2025
+127.0.0.1 - - [22/Sep/2025 19:57:18] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [22/Sep/2025 20:00:20] "GET /relative_score.pdf HTTP/1.1" 200 -
+127.0.0.1 - - [22/Sep/2025 20:02:32] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [22/Sep/2025 20:02:38] "GET /first_score_all.pdf HTTP/1.1" 200 -
+Starting devcontainer start helper: Mon Sep 22 20:03:48 UTC 2025
+Generating score (project_template.py) ...
+WARNING: yacc table file version is out of date
+GNU LilyPond 2.24.1 (running Guile 2.2)
+Processing `relative_score.ly'
+Parsing...
+Interpreting music...
+Preprocessing graphical objects...
+Finding the ideal number of pages...
+Fitting music on 1 page...
+Drawing systems...
+Converting to `relative_score.pdf'...
+Success: compilation successfully completed
+--- Parsing music from LilyPond strings ---
+
+--- Transforming with music21 ---
+Original melody start: E5
+Transposed melody start: B5
+
+Original melody contents:
+{0.0} <music21.note.Note E>
+{1.0} <music21.note.Note F>
+{2.0} <music21.note.Note G>
+{3.0} <music21.note.Note A>
+{4.0} <music21.chord.Chord C6 E6 G6>
+{7.0} <music21.note.Rest quarter>
+
+Transposed melody contents:
+{0.0} <music21.note.Note B>
+{1.0} <music21.note.Note C>
+{2.0} <music21.note.Note D>
+{3.0} <music21.note.Note E>
+{4.0} <music21.chord.Chord G6 B6 D7>
+{7.0} <music21.note.Rest quarter>
+
+--- Engraving with Abjad ---
+Compiling relative_score.ly with LilyPond...
+
+✅ Done.
+Generation completed successfully.
+Starting HTTP server on 0.0.0.0:8888 ...
+HTTP server started (PID 427).
+Devcontainer start helper finished: Mon Sep 22 20:03:52 UTC 2025
+127.0.0.1 - - [22/Sep/2025 20:05:18] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [22/Sep/2025 20:05:30] "GET /template_primer.txt HTTP/1.1" 200 -
+Starting devcontainer start helper: Mon Sep 22 20:13:40 UTC 2025
+Generating score (project_template.py) ...
+WARNING: yacc table file version is out of date
+GNU LilyPond 2.24.1 (running Guile 2.2)
+Processing `relative_score.ly'
+Parsing...
+Interpreting music...
+Preprocessing graphical objects...
+Finding the ideal number of pages...
+Fitting music on 1 page...
+Drawing systems...
+Converting to `relative_score.pdf'...
+Success: compilation successfully completed
+--- Parsing music from LilyPond strings ---
+
+--- Transforming with music21 ---
+Original melody start: E5
+Transposed melody start: B5
+
+Original melody contents:
+{0.0} <music21.note.Note E>
+{1.0} <music21.note.Note F>
+{2.0} <music21.note.Note G>
+{3.0} <music21.note.Note A>
+{4.0} <music21.chord.Chord C6 E6 G6>
+{7.0} <music21.note.Rest quarter>
+
+Transposed melody contents:
+{0.0} <music21.note.Note B>
+{1.0} <music21.note.Note C>
+{2.0} <music21.note.Note D>
+{3.0} <music21.note.Note E>
+{4.0} <music21.chord.Chord G6 B6 D7>
+{7.0} <music21.note.Rest quarter>
+
+--- Engraving with Abjad ---
+Compiling relative_score.ly with LilyPond...
+
+✅ Done.
+Generation completed successfully.
+Starting HTTP server on 0.0.0.0:8888 ...
+HTTP server started (PID 1727).
+Devcontainer start helper finished: Mon Sep 22 20:13:44 UTC 2025
+Starting devcontainer start helper: Mon Sep 22 20:20:27 UTC 2025
+Generating score (project_template.py) ...
+WARNING: yacc table file version is out of date
+GNU LilyPond 2.24.1 (running Guile 2.2)
+Processing `relative_score.ly'
+Parsing...
+Interpreting music...
+Preprocessing graphical objects...
+Finding the ideal number of pages...
+Fitting music on 1 page...
+Drawing systems...
+Converting to `relative_score.pdf'...
+Success: compilation successfully completed
+--- Parsing music from LilyPond strings ---
+
+--- Transforming with music21 ---
+Original melody start: E5
+Transposed melody start: B5
+
+Original melody contents:
+{0.0} <music21.note.Note E>
+{1.0} <music21.note.Note F>
+{2.0} <music21.note.Note G>
+{3.0} <music21.note.Note A>
+{4.0} <music21.chord.Chord C6 E6 G6>
+{7.0} <music21.note.Rest quarter>
+
+Transposed melody contents:
+{0.0} <music21.note.Note B>
+{1.0} <music21.note.Note C>
+{2.0} <music21.note.Note D>
+{3.0} <music21.note.Note E>
+{4.0} <music21.chord.Chord G6 B6 D7>
+{7.0} <music21.note.Rest quarter>
+
+--- Engraving with Abjad ---
+Compiling relative_score.ly with LilyPond...
+
+✅ Done.
+Generation completed successfully.
+Starting HTTP server on 0.0.0.0:8888 ...
+HTTP server started (PID 419).
+Devcontainer start helper finished: Mon Sep 22 20:20:30 UTC 2025
+127.0.0.1 - - [22/Sep/2025 20:21:54] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [22/Sep/2025 20:21:58] "GET /first_score_all.pdf HTTP/1.1" 200 -
+127.0.0.1 - - [22/Sep/2025 20:22:24] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [22/Sep/2025 20:22:27] "GET /first_score_all.ly HTTP/1.1" 200 -
+127.0.0.1 - - [22/Sep/2025 20:30:20] "GET /first_score_all.ly HTTP/1.1" 200 -

@@ -1,0 +1,137 @@
+Template primer — LilyPond snippets, tinyNotation and examplesTemplate primer — LilyPond snippets, tinyNotation and examples
+
+
+
+This project accepts a small subset of LilyPond notation (used inThis project accepts a small subset of LilyPond notation (used in
+
+`MELODY_SNIPPET` and `HARMONY_SNIPPET` in `first.py`) and plain Python`MELODY_SNIPPET` and `HARMONY_SNIPPET` in `first.py`) and plain Python
+
+lists (used in `MELODY_LIST`). The primer below documents the supportedlists (used in `MELODY_LIST`). The primer below documents the supported
+
+syntax, simple examples, and quick tips so you can experiment quickly.syntax, simple examples, and quick tips so you can experiment quickly.
+
+
+
+--- Supported LilyPond subset (what the parser recognizes)--- Supported LilyPond subset (what the parser recognizes)
+
+- Notes: a b c d e f g (lowercase)- Notes: a b c d e f g (lowercase)
+
+- Accidentals: "is" = sharp (e.g. cis), "es" = flat (e.g. ees)- Accidentals: "is" = sharp (e.g. cis), "es" = flat (e.g. ees)
+
+- Octave marks: apostrophes (') raise octave, commas (,) lower octave- Octave marks: apostrophes (') raise octave, commas (,) lower octave
+
+  - Example: c' is one octave above c; c,, is two octaves below  - Example: c' is one octave above c; c,, is two octaves below
+
+- Durations: numbers after note name- Durations: numbers after note name
+
+  - c4 = quarter, c2 = half, c1 = whole, c8 = eighth  - c4 = quarter, c2 = half, c1 = whole, c8 = eighth
+
+  - Dotted durations are allowed (c4.)  - Dotted durations are allowed (c4.)
+
+- Rests: r4, r2, etc.- Rests: r4, r2, etc.
+
+- Chords: <c e g>2- Chords: <c e g>2
+
+- Relative mode: \relative e' { ... } — octave resolution is relative to the- Relative mode: \relative e' { ... } — octave resolution is relative to the
+
+  provided base pitch.  provided base pitch.
+
+- Simple dotted durations are parsed and converted to music21 quarterLength- Simple dotted durations are parsed and converted to music21 quarterLength
+
+
+
+--- What is NOT supported (or only partially)--- What is NOT supported (or only partially)
+
+- Advanced LilyPond commands (\grace, \tuplet, spanners, custom markup)- Advanced LilyPond commands (\grace, \tuplet, spanners, custom markup)
+
+- Complex notation like tremolos, microtones, or complex markup- Complex notation like tremolos, microtones, or complex markup
+
+- Dynamics, articulations and text are not converted by the parser- Dynamics, articulations and text are not converted by the parser
+
+
+
+--- TinyNotation (music21) alternative--- TinyNotation (music21) alternative
+
+- music21's tinyNotation is a compact Python string format that can be- music21's tinyNotation is a compact Python string format that can be
+
+  parsed by music21 directly. If you prefer composing in Python, you can  parsed by music21 directly. If you prefer composing in Python, you can
+
+  add a tinyNotation string and convert it:  add a tinyNotation string and convert it:
+
+
+
+  from music21 import converter  from music21 import converter
+
+  s = converter.parse('tinynotation: 4/4 c4 d4 e4 f4')  s = converter.parse('tinynotation: 4/4 c4 d4 e4 f4')
+
+
+
+- If you'd like, we can add support in the template to accept tinyNotation- If you'd like, we can add support in the template to accept tinyNotation
+
+  strings as an alternative snippet type.  strings as an alternative snippet type.
+
+
+
+--- Examples (copy into `first.py` and re-run `python3 first.py`)--- Examples (copy into `first.py` and re-run `python3 first.py`)
+
+- Simple melody (LilyPond):- Simple melody (LilyPond):
+
+  # MELODY_SNIPPET = r"\relative c' { c4 d e f g a b c }"  # MELODY_SNIPPET = r"\relative c' { c4 d e f g a b c }"
+
+
+
+- Sharp/flat and dotted durations:- Sharp/flat and dotted durations:
+
+  # MELODY_SNIPPET = r"\relative c' { cis4 d es4. r8 g4 }"  # MELODY_SNIPPET = r"\relative c' { cis4 d es4. r8 g4 }"
+
+
+
+- Chords in harmony:- Chords in harmony:
+
+  # HARMONY_SNIPPET = "<c e g>1 <f a c>1"  # two whole-note chords  # HARMONY_SNIPPET = "<c e g>1 <f a c>1"  # two whole-note chords
+
+
+
+- Relative mode with octave reference:- Relative mode with octave reference:
+
+  # MELODY_SNIPPET = r"\relative e' { e4 d c b c' d' e' }"  # MELODY_SNIPPET = r"\relative e' { e4 d c b c' d' e' }"
+
+
+
+- Python list variant (melody from list):- Python list variant (melody from list):
+
+  # MELODY_LIST = ["e4", "d4", "c4", "b3"]  # MELODY_LIST = ["e4", "d4", "c4", "b3"]
+
+
+
+--- Quick tips--- Quick tips
+
+- Use `part.show('text')` (the script already does this) to inspect the parsed- Use `part.show('text')` (the script already does this) to inspect the parsed
+
+  music before engraving.  music before engraving.
+
+- Provide clear `parts` names; they become staff names and MIDI track names.- Provide clear `parts` names; they become staff names and MIDI track names.
+
+- If you want instrument mapping for MIDI playback, ask and I'll add a- If you want instrument mapping for MIDI playback, ask and I'll add a
+
+  `midi_programs` option to the engraver.  `midi_programs` option to the engraver.
+
+
+
+--- Troubleshooting--- Troubleshooting
+
+- If the snippet fails to parse, keep to the supported subset above and run- If the snippet fails to parse, keep to the supported subset above and run
+
+  `python3 first.py` to see the parsed text output.  `python3 first.py` to see the parsed text output.
+
+- To hear MIDI: open the generated `.mid` or `.midi` file in Frescobaldi and- To hear MIDI: open the generated `.mid` or `.midi` file in Frescobaldi and
+
+  ensure a synth (e.g. FluidSynth) is configured for playback.  ensure a synth (e.g. FluidSynth) is configured for playback.
+
+
+
+Enjoy experimenting — if you'd like, I can add a `--preview` flag thatEnjoy experimenting — if you'd like, I can add a `--preview` flag that
+
+accepts a snippet and writes a temporary .ly and PDF so you can iterateaccepts a snippet and writes a temporary .ly and PDF so you can iterate
+
+faster.faster.

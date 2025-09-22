@@ -9,8 +9,8 @@ from pathlib import Path
 
 
 # Variant 1: LilyPond-snippet van E4 naar B3
-MELODY_SNIPPET = r"\relative e' { e4 d c b }"  # E4 D4 C4 B3
-HARMONY_SNIPPET = "e2 b2 <e g b>1"
+MELODY_SNIPPET = r"\relative c' { e2 b e | e2 f e }"  # E4 B3 C4 B3
+HARMONY_SNIPPET = "e2 b2 | <e g b>1"
 OUTPUT_BASENAME = "first_score"
 
 # Variant 2: Python-lijst van noten
