@@ -14,3 +14,5 @@ __pycache__/
 
 # VS Code
 .vscode/
+# allow workspace VS Code settings file in the repo (explicitly)
+!/.vscode/settings.json
