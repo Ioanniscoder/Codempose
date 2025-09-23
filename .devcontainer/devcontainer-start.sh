@@ -20,15 +20,27 @@ else
 fi
 
 # Check if a server is already listening on 8888
+# Ensure outputs directory exists (we want to serve generated artifacts)
+mkdir -p outputs
+
+# If a server is listening on 8888, attempt a graceful restart so it serves outputs/
 if ss -ltnp 2>/dev/null | grep -q ":8888"; then
-  echo "HTTP server already running on port 8888." | tee -a "$LOGFILE"
-else
-  echo "Starting HTTP server on 0.0.0.0:8888 ..." | tee -a "$LOGFILE"
-  # Start server in background and record PID
-  nohup python3 -m http.server 8888 --bind 0.0.0.0 >> "$LOGFILE" 2>&1 &
-  echo $! > "$PIDFILE"
-  echo "HTTP server started (PID $(cat $PIDFILE))." | tee -a "$LOGFILE"
+  echo "HTTP server already running on port 8888; attempting restart to serve outputs/..." | tee -a "$LOGFILE"
+  if [ -f "$PIDFILE" ]; then
+    OLDPID=$(cat "$PIDFILE" 2>/dev/null || true)
+    if [ -n "$OLDPID" ] && ps -p "$OLDPID" > /dev/null 2>&1; then
+      echo "Stopping previous server (PID $OLDPID) ..." | tee -a "$LOGFILE"
+      kill "$OLDPID" || true
+      sleep 0.5
+    fi
+  fi
 fi
+
+echo "Starting HTTP server on 0.0.0.0:8888 (serving outputs/) ..." | tee -a "$LOGFILE"
+# Start server in background and record PID; serve the outputs/ directory directly
+nohup python3 -m http.server 8888 --bind 0.0.0.0 --directory outputs >> "$LOGFILE" 2>&1 &
+echo $! > "$PIDFILE"
+echo "HTTP server started (PID $(cat $PIDFILE))." | tee -a "$LOGFILE"
 
 echo "Devcontainer start helper finished: $(date)" >> "$LOGFILE"
 
