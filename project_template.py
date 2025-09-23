@@ -179,7 +179,7 @@ def ql_to_lily_duration_string(ql: float) -> str:
 def m21_pitch_to_lily(p: music21.pitch.Pitch) -> str:
     return abjad.lilypond(abjad.NamedPitch(p.nameWithOctave))
 
-def engrave_with_abjad(parts: dict, output_file: str):
+def engrave_with_abjad(parts: dict, output_file: str, prune_other: bool = False):
     # If one part provides global directives (time signature, key, tempo),
     # propagate them to any part that lacks them. This ensures consistent
     # engraving (same barlines and tempo) even when some parts were created
@@ -373,6 +373,21 @@ def engrave_with_abjad(parts: dict, output_file: str):
     else:
         out_dir = out_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Optionally prune other generated basenames in out_dir so only files
+    # matching this output basename remain (e.g. keep first_score.* only).
+    if prune_other:
+        try:
+            basename = out_path.stem
+            for p in out_dir.iterdir():
+                if not p.is_file():
+                    continue
+                if p.suffix.lower() in {'.ly', '.pdf', '.midi'} and p.stem != basename:
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     ly_filename = out_path.with_suffix('.ly').name
     ly_path = out_dir / ly_filename

@@ -106,23 +106,8 @@ def chordify_harmony(melody):
 import project_template as pt
 
 
-def _prune_other_outputs(basename: str, out_dir: Path = Path("outputs")):
-    """Remove other generated artifacts in out_dir that don't match basename.
-
-    This keeps only files named <basename>.* (e.g. .ly, .pdf, .midi) and
-    deletes other .ly/.pdf/.midi files to ensure a single canonical base name.
-    """
-    if not out_dir.exists():
-        return
-    for p in out_dir.iterdir():
-        if not p.is_file():
-            continue
-        if p.suffix.lower() in {".ly", ".pdf", ".midi"} and p.stem != basename:
-            try:
-                p.unlink()
-                print(f"Removed other generated file: {p}")
-            except Exception as exc:
-                print(f"Warning: failed to remove {p}: {exc}")
+# output pruning is handled by the template engraver; keep this file focused
+# on the musical content and let project_template.py manage files.
 
 
 def _propagate_global_directives(source_part, target_part):
@@ -231,7 +216,6 @@ if __name__ == "__main__":
     # runs from accumulating.
     out_dir = Path("outputs")
     out_dir.mkdir(parents=True, exist_ok=True)
-    _prune_other_outputs(OUTPUT_BASENAME, out_dir=out_dir)
 
     if out_pdf.exists() and not args.force:
         print(f"Output exists ({out_pdf}). Use --force to overwrite. Leaving file unchanged.")
@@ -242,5 +226,6 @@ if __name__ == "__main__":
                 continue
             _propagate_global_directives(melody1, part)
 
-        pt.engrave_with_abjad(parts_to_engrave, OUTPUT_BASENAME)
+        # Ask the template to prune other basenames so only this base name remains
+        pt.engrave_with_abjad(parts_to_engrave, OUTPUT_BASENAME, prune_other=True)
         print(f"✅ PDF generated: {OUTPUT_BASENAME}.pdf")
