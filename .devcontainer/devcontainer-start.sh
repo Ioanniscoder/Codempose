@@ -12,6 +12,13 @@ PIDFILE=".devcontainer/devcontainer-server.pid"
 mkdir -p .devcontainer
 echo "Starting devcontainer start helper: $(date)" >> "$LOGFILE"
 
+# Ensure canonical prompt is installed for the container user (so it persists)
+if [ -f ".devcontainer/bash_prompt_choice" ]; then
+  cp .devcontainer/bash_prompt_choice "$HOME/.bash_prompt_choice" || true
+  chown $(id -u):$(id -g) "$HOME/.bash_prompt_choice" || true
+  echo "Installed canonical prompt to $HOME/.bash_prompt_choice" >> "$LOGFILE"
+fi
+
 echo "Generating score (project_template.py) ..." | tee -a "$LOGFILE"
 if python3 project_template.py >> "$LOGFILE" 2>&1; then
   echo "Generation completed successfully." | tee -a "$LOGFILE"

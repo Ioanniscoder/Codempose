@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Canonical prompt choice for this project. Copied to $HOME on devcontainer start.
+# This ensures the workspace prompt is restored after container rebuilds.
+
+# Literal workspace prompt requested by user
+PS1='/Codempose '
+
+export PS1
