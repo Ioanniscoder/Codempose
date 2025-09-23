@@ -18,14 +18,37 @@ import abjad
 def parse_lilypond_snippet(snippet: str) -> music21.stream.Part:
     """
     Parses a LilyPond snippet, including \relative mode and chords.
+    If a \time X/Y token is present, attach a music21 TimeSignature to the
+    returned Part so the engraver can pick it up.
     """
     snippet = snippet.strip()
     m = re.match(r"\\relative\s+([a-g][eis]*[,']*)\s*\{(.+)\}", snippet, re.DOTALL)
     if m:
         base = m.group(1).strip()
         body = m.group(2).strip()
-        return _parse_relative_block(base, body)
-    return _parse_absolute_block(snippet)
+        part = _parse_relative_block(base, body)
+        # detect and attach \time if present
+        tm = re.search(r"\\time\s+(\d+)\/(\d+)", snippet)
+        if tm:
+            try:
+                num, den = int(tm.group(1)), int(tm.group(2))
+                ts = music21.meter.TimeSignature(f"{num}/{den}")
+                part.insert(0, ts)
+            except Exception:
+                pass
+        return part
+
+    # absolute-mode
+    part = _parse_absolute_block(snippet)
+    tm = re.search(r"\\time\s+(\d+)\/(\d+)", snippet)
+    if tm:
+        try:
+            num, den = int(tm.group(1)), int(tm.group(2))
+            ts = music21.meter.TimeSignature(f"{num}/{den}")
+            part.insert(0, ts)
+        except Exception:
+            pass
+    return part
 
 def _get_tokens(body: str):
     """THE FIX: Use a robust regex to find all musical tokens."""
@@ -37,7 +60,7 @@ def _parse_relative_block(base_pitch: str, body: str) -> music21.stream.Part:
     ref_note = _parse_note_token(base_pitch)
     if not isinstance(ref_note, music21.note.Note):
         raise ValueError(f"Invalid base pitch for relative: {base_pitch}")
-    
+
     last_pitch = ref_note.pitch
     tokens = _get_tokens(body) # Use the new, robust tokenizer
 
@@ -128,9 +151,30 @@ def _parse_chord_token(tok: str, last_pitch: music21.pitch.Pitch = None):
 # music21 → Abjad/LilyPond export
 # ==============================
 def ql_to_lily_duration_string(ql: float) -> str:
-    dur = abjad.Duration(Fraction(ql / 4))
-    # abjad.Duration.lilypond_duration_string is a string property, not a callable
-    return dur.lilypond_duration_string
+    # Try the exact representation first (fraction of whole note)
+    frac = Fraction(ql).limit_denominator(1024)
+    try:
+        dur = abjad.Duration(Fraction(frac, 4))
+        return dur.lilypond_duration_string
+    except Exception:
+        # Fall back: approximate with power-of-two base durations and dots
+        candidates = []
+        # LilyPond duration numbers (1,2,4,8,16...) correspond to whole-note denominators
+        bases = [1, 2, 4, 8, 16, 32, 64]
+        for base in bases:
+            for dots in range(0, 4):
+                factor = 2 - 1 / (2 ** dots) if dots > 0 else 1
+                ql_candidate = 4 / base * factor
+                diff = abs(ql_candidate - float(ql))
+                candidates.append((diff, base, dots, ql_candidate))
+        candidates.sort(key=lambda x: x[0])
+        best = candidates[0]
+        diff, base, dots, ql_candidate = best
+        # Build lilypond duration string (e.g. 4., 8..)
+        dur_str = str(base) + ('.' * dots)
+        if diff > 1e-2:
+            print(f"[warning] approximate duration: requested ql={ql} approximated as {ql_candidate} (LilyPond: {dur_str}); diff={diff}")
+        return dur_str
 
 def m21_pitch_to_lily(p: music21.pitch.Pitch) -> str:
     return abjad.lilypond(abjad.NamedPitch(p.nameWithOctave))
@@ -172,13 +216,37 @@ def engrave_with_abjad(parts: dict, output_file: str):
                 # first staff: add treble clef, key/time/metronome
                 if idx == 0:
                     abjad.attach(abjad.Clef("treble"), leaf0)
-                    abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
+                    # prefer a TimeSignature found in the original music21 Part
+                    ts_attached = False
+                    try:
+                        orig_part = parts.get(name)
+                        if orig_part is not None:
+                            ts_list = list(orig_part.recurse().getElementsByClass(music21.meter.TimeSignature))
+                            if ts_list:
+                                ts = ts_list[0]
+                                abjad.attach(abjad.TimeSignature((ts.numerator, ts.denominator)), leaf0)
+                                ts_attached = True
+                    except Exception:
+                        ts_attached = False
+                    if not ts_attached:
+                        abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
                     abjad.attach(abjad.KeySignature(abjad.NamedPitchClass("c"), abjad.Mode("major")), leaf0)
                     abjad.attach(abjad.MetronomeMark(abjad.Duration(1, 4), 100), leaf0)
                 # if name suggests harmony, use bass clef
                 elif "harmony" in name.lower() or "bass" in name.lower():
                     abjad.attach(abjad.Clef("bass"), leaf0)
-                    abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
+                    # try to attach the same time signature if present
+                    try:
+                        orig_part = parts.get(name)
+                        if orig_part is not None:
+                            ts_list = list(orig_part.recurse().getElementsByClass(music21.meter.TimeSignature))
+                            if ts_list:
+                                ts = ts_list[0]
+                                abjad.attach(abjad.TimeSignature((ts.numerator, ts.denominator)), leaf0)
+                            else:
+                                abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
+                    except Exception:
+                        abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
         except Exception:
             # keep going even if attachments fail
             pass
@@ -207,10 +275,21 @@ def engrave_with_abjad(parts: dict, output_file: str):
         # fallback: append layout/midi blocks
         wrapped = ly_text + "\n\\layout { }\n\\midi { }\n"
 
-    ly_path = Path(output_file).with_suffix(".ly")
+    # Determine output directory. If output_file includes a path, use that
+    # parent, otherwise default to outputs/ so generated artifacts are grouped.
+    out_path = Path(output_file)
+    if out_path.parent == Path('.') or str(out_path.parent) == '':
+        out_dir = Path('outputs')
+    else:
+        out_dir = out_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ly_filename = out_path.with_suffix('.ly').name
+    ly_path = out_dir / ly_filename
     ly_path.write_text(wrapped)
     print(f"Compiling {ly_path} with LilyPond...")
-    subprocess.run(["lilypond", str(ly_path)])
+    # Run lilypond in the output directory so auxiliary files land there
+    subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir))
 
 # ==============================
 # Demo / main
