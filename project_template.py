@@ -180,6 +180,57 @@ def m21_pitch_to_lily(p: music21.pitch.Pitch) -> str:
     return abjad.lilypond(abjad.NamedPitch(p.nameWithOctave))
 
 def engrave_with_abjad(parts: dict, output_file: str):
+    # If one part provides global directives (time signature, key, tempo),
+    # propagate them to any part that lacks them. This ensures consistent
+    # engraving (same barlines and tempo) even when some parts were created
+    # without those directives.
+    def _propagate_global_directives(source_part, target_part):
+        try:
+            from music21 import meter, tempo, key as m21key
+            ts_list = list(source_part.recurse().getElementsByClass(meter.TimeSignature))
+            if ts_list:
+                ts = ts_list[0]
+                existing_ts = list(target_part.recurse().getElementsByClass(meter.TimeSignature))
+                if not existing_ts:
+                    target_part.insert(0, ts)
+            key_list = list(source_part.recurse().getElementsByClass(m21key.Key))
+            if key_list:
+                k = key_list[0]
+                existing_k = list(target_part.recurse().getElementsByClass(m21key.Key))
+                if not existing_k:
+                    target_part.insert(0, k)
+            tempo_list = list(source_part.recurse().getElementsByClass(tempo.MetronomeMark))
+            if tempo_list:
+                tm = tempo_list[0]
+                existing_tm = list(target_part.recurse().getElementsByClass(tempo.MetronomeMark))
+                if not existing_tm:
+                    target_part.insert(0, tm)
+        except Exception:
+            pass
+
+    # Choose a source for global directives: prefer the first part that contains
+    # a TimeSignature, otherwise fall back to the first part in the dict.
+    source_for_directives = None
+    try:
+        from music21 import meter
+        for p in parts.values():
+            if list(p.recurse().getElementsByClass(meter.TimeSignature)):
+                source_for_directives = p
+                break
+        if source_for_directives is None:
+            # fallback to first part
+            if len(parts) > 0:
+                source_for_directives = next(iter(parts.values()))
+    except Exception:
+        source_for_directives = next(iter(parts.values())) if parts else None
+
+    if source_for_directives is not None:
+        for name, part in parts.items():
+            if part is None:
+                continue
+            if part is not source_for_directives:
+                _propagate_global_directives(source_for_directives, part)
+
     # Convert each provided music21 Part into an Abjad Voice (if it contains tokens)
     voices = {}
     for name, part in parts.items():

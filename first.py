@@ -106,10 +106,60 @@ def chordify_harmony(melody):
 import project_template as pt
 
 
+def _prune_other_outputs(basename: str, out_dir: Path = Path("outputs")):
+    """Remove other generated artifacts in out_dir that don't match basename.
+
+    This keeps only files named <basename>.* (e.g. .ly, .pdf, .midi) and
+    deletes other .ly/.pdf/.midi files to ensure a single canonical base name.
+    """
+    if not out_dir.exists():
+        return
+    for p in out_dir.iterdir():
+        if not p.is_file():
+            continue
+        if p.suffix.lower() in {".ly", ".pdf", ".midi"} and p.stem != basename:
+            try:
+                p.unlink()
+                print(f"Removed other generated file: {p}")
+            except Exception as exc:
+                print(f"Warning: failed to remove {p}: {exc}")
+
+
+def _propagate_global_directives(source_part, target_part):
+    """Ensure target_part has the same time signature, key, and tempo as source_part if missing."""
+    try:
+        # TimeSignature
+        from music21 import meter, tempo, key as m21key
+        ts_list = list(source_part.recurse().getElementsByClass(meter.TimeSignature))
+        if ts_list:
+            ts = ts_list[0]
+            existing_ts = list(target_part.recurse().getElementsByClass(meter.TimeSignature))
+            if not existing_ts:
+                target_part.insert(0, ts)
+        # Key
+        key_list = list(source_part.recurse().getElementsByClass(m21key.Key))
+        if key_list:
+            k = key_list[0]
+            existing_k = list(target_part.recurse().getElementsByClass(m21key.Key))
+            if not existing_k:
+                target_part.insert(0, k)
+        # Tempo (MetronomeMark)
+        tempo_list = list(source_part.recurse().getElementsByClass(tempo.MetronomeMark))
+        if tempo_list:
+            tm = tempo_list[0]
+            existing_tm = list(target_part.recurse().getElementsByClass(tempo.MetronomeMark))
+            if not existing_tm:
+                target_part.insert(0, tm)
+    except Exception:
+        # Non-fatal: if propagation fails, continue with engraving
+        pass
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run first.py studies")
     parser.add_argument("--mode", choices=["manual", "auto", "chordify", "both"], default="both",
-                        help="Which harmony mode to engrave: manual=use HARMONY_SNIPPET, auto=generate per-note harmony, chordify=grouped harmony, both=run both and overwrite outputs")
+                        help="Which harmony mode to engrave: manual=use HARMONY_SNIPPET, auto=generate per-note harmony, chordify=grouped harmony, both=include both harmonies in a single score")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing output files if present")
     args = parser.parse_args()
 
     # Minimal run: parse Melody1 and keep other example blocks present but commented
@@ -156,27 +206,41 @@ if __name__ == "__main__":
         # "Melody3": melody3,
         # "Melody4": melody4,
     }
-    # Choose behavior based on CLI mode
+    # Choose behavior based on CLI mode. Build the parts variable once and
+    # call the engraver a single time. If the output file already exists and
+    # --force is not provided, do nothing so the file remains unchanged.
+    out_pdf = Path("outputs") / f"{OUTPUT_BASENAME}.pdf"
+
+    parts_to_engrave = {"Melody1": melody1}
     if args.mode == "manual":
-        parts = {"Melody1": melody1, "Harmony": harmony1}
-        pt.engrave_with_abjad(parts, OUTPUT_BASENAME)
-        print(f"✅ PDF generated: {OUTPUT_BASENAME}.pdf")
+        parts_to_engrave["Harmony"] = harmony1
     elif args.mode == "auto":
         auto_harmony = generate_harmony_from_melody(melody1)
-        parts = {"Melody1": melody1, "AutoHarmony": auto_harmony}
-        pt.engrave_with_abjad(parts, OUTPUT_BASENAME)
-        print(f"✅ PDF generated: {OUTPUT_BASENAME}.pdf")
+        parts_to_engrave["AutoHarmony"] = auto_harmony
     elif args.mode == "chordify":
         chord_harmony = chordify_harmony(melody1)
-        parts = {"Melody1": melody1, "ChordHarmony": chord_harmony}
-        pt.engrave_with_abjad(parts, OUTPUT_BASENAME)
-        print(f"✅ PDF generated: {OUTPUT_BASENAME}.pdf")
+        parts_to_engrave["ChordHarmony"] = chord_harmony
     else:  # both
-        # Run manual first, then overwrite with auto (keeps behavior simple)
-        parts = {"Melody1": melody1, "Harmony": harmony1}
-        pt.engrave_with_abjad(parts, OUTPUT_BASENAME)
-        print(f"✅ PDF generated: {OUTPUT_BASENAME}.pdf")
+        # include both manual and auto harmonies in a single engraving
+        parts_to_engrave["Harmony"] = harmony1
         auto_harmony = generate_harmony_from_melody(melody1)
-        parts2 = {"Melody1": melody1, "AutoHarmony": auto_harmony}
-        pt.engrave_with_abjad(parts2, OUTPUT_BASENAME)
+        parts_to_engrave["AutoHarmony"] = auto_harmony
+
+    # Ensure outputs dir exists and remove other basenames so only our
+    # chosen basename remains. This prevents stray artifacts from earlier
+    # runs from accumulating.
+    out_dir = Path("outputs")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _prune_other_outputs(OUTPUT_BASENAME, out_dir=out_dir)
+
+    if out_pdf.exists() and not args.force:
+        print(f"Output exists ({out_pdf}). Use --force to overwrite. Leaving file unchanged.")
+    else:
+        # Propagate time/key/tempo from melody to any other parts that lack them
+        for name, part in list(parts_to_engrave.items()):
+            if name == "Melody1":
+                continue
+            _propagate_global_directives(melody1, part)
+
+        pt.engrave_with_abjad(parts_to_engrave, OUTPUT_BASENAME)
         print(f"✅ PDF generated: {OUTPUT_BASENAME}.pdf")
