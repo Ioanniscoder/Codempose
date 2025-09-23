@@ -1,0 +1,6 @@
+ipython
+pytest
+black
+flake8
+music21
+abjad

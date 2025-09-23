@@ -1,0 +1,5 @@
+{
+  // Workspace hint for human readers and some tools/extensions.
+  "preferredAssistantLanguage": "en",
+  "assistant.preferredLanguage": "en"
+}

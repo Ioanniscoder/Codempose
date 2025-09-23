@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Devcontainer start helper:
+# - run the generation step (project_template.py)
+# - start a background http.server bound to 0.0.0.0:8888 if not already running
+# - write logs to .devcontainer/devcontainer-start.log and PID to .devcontainer/devcontainer-server.pid
+
+LOGFILE=".devcontainer/devcontainer-start.log"
+PIDFILE=".devcontainer/devcontainer-server.pid"
+
+mkdir -p .devcontainer
+echo "Starting devcontainer start helper: $(date)" >> "$LOGFILE"
+
+# Ensure canonical prompt is installed for the container user (so it persists)
+if [ -f ".devcontainer/bash_prompt_choice" ]; then
+  cp .devcontainer/bash_prompt_choice "$HOME/.bash_prompt_choice" || true
+  chown $(id -u):$(id -g) "$HOME/.bash_prompt_choice" || true
+  echo "Installed canonical prompt to $HOME/.bash_prompt_choice" >> "$LOGFILE"
+fi
+
+echo "Generating score (project_template.py) ..." | tee -a "$LOGFILE"
+if python3 project_template.py >> "$LOGFILE" 2>&1; then
+  echo "Generation completed successfully." | tee -a "$LOGFILE"
+else
+  echo "Generation failed; see $LOGFILE for details. Continuing to server start." | tee -a "$LOGFILE"
+fi
+
+# Check if a server is already listening on 8888
+# Ensure outputs directory exists (we want to serve generated artifacts)
+mkdir -p outputs
+
+# If a server is listening on 8888, attempt a graceful restart so it serves outputs/
+if ss -ltnp 2>/dev/null | grep -q ":8888"; then
+  echo "HTTP server already running on port 8888; attempting restart to serve outputs/..." | tee -a "$LOGFILE"
+  if [ -f "$PIDFILE" ]; then
+    OLDPID=$(cat "$PIDFILE" 2>/dev/null || true)
+    if [ -n "$OLDPID" ] && ps -p "$OLDPID" > /dev/null 2>&1; then
+      echo "Stopping previous server (PID $OLDPID) ..." | tee -a "$LOGFILE"
+      kill "$OLDPID" || true
+      sleep 0.5
+    fi
+  fi
+fi
+
+echo "Starting HTTP server on 0.0.0.0:8888 (serving outputs/) ..." | tee -a "$LOGFILE"
+# Start server in background and record PID; serve the outputs/ directory directly
+nohup python3 -m http.server 8888 --bind 0.0.0.0 --directory outputs >> "$LOGFILE" 2>&1 &
+echo $! > "$PIDFILE"
+echo "HTTP server started (PID $(cat $PIDFILE))." | tee -a "$LOGFILE"
+
+echo "Devcontainer start helper finished: $(date)" >> "$LOGFILE"
+
+exit 0
