@@ -187,16 +187,55 @@ def engrave_with_abjad(parts: dict, output_file: str):
             continue
         tokens = []
         for el in part.flatten().notesAndRests:
-            if isinstance(el, music21.chord.Chord):
-                dur_str = ql_to_lily_duration_string(el.quarterLength)
-                chord_pitches = " ".join(m21_pitch_to_lily(p) for p in el.pitches)
-                tokens.append(f"<{chord_pitches}>{dur_str}")
-            elif isinstance(el, music21.note.Note):
-                dur_str = ql_to_lily_duration_string(el.quarterLength)
-                tokens.append(f"{m21_pitch_to_lily(el.pitch)}{dur_str}")
-            elif isinstance(el, music21.note.Rest):
-                dur_str = ql_to_lily_duration_string(el.quarterLength)
-                tokens.append(f"r{dur_str}")
+            # Try to create an exact LilyPond duration via Abjad; if Abjad
+            # cannot assign the duration (e.g. 1/3 whole), fall back to
+            # emitting a LilyPond tuplet that represents the intended
+            # duration exactly.
+            try:
+                frac = Fraction(el.quarterLength).limit_denominator(1024)
+            except Exception:
+                frac = Fraction(str(el.quarterLength)).limit_denominator(1024)
+
+            try:
+                # abjad expects a fraction of a whole note
+                dur = abjad.Duration(Fraction(frac, 4))
+                dur_str = dur.lilypond_duration_string
+                if isinstance(el, music21.chord.Chord):
+                    chord_pitches = " ".join(m21_pitch_to_lily(p) for p in el.pitches)
+                    tokens.append(f"<{chord_pitches}>{dur_str}")
+                elif isinstance(el, music21.note.Note):
+                    tokens.append(f"{m21_pitch_to_lily(el.pitch)}{dur_str}")
+                elif isinstance(el, music21.note.Rest):
+                    tokens.append(f"r{dur_str}")
+            except Exception:
+                # Couldn't assign a simple duration; try to encode as a tuplet
+                tuplet_emitted = False
+                for base in [1, 2, 4, 8, 16, 32]:
+                    # ratio r = (desired ql) / (4/base)
+                    r = Fraction(frac * base, 4).limit_denominator(32)
+                    # Limit numerator/denominator to reasonable values
+                    if r.numerator <= 32 and r.denominator <= 32:
+                        inner_dur = str(base)
+                        if isinstance(el, music21.chord.Chord):
+                            chord_pitches = " ".join(m21_pitch_to_lily(p) for p in el.pitches)
+                            inner = f"<{chord_pitches}>{inner_dur}"
+                        elif isinstance(el, music21.note.Note):
+                            inner = f"{m21_pitch_to_lily(el.pitch)}{inner_dur}"
+                        else:
+                            inner = f"r{inner_dur}"
+                        tokens.append(f"\\tuplet {r.numerator}/{r.denominator} {{ {inner} }}")
+                        tuplet_emitted = True
+                        break
+                if not tuplet_emitted:
+                    # Fallback to approximate lily duration string (existing behavior)
+                    dur_str = ql_to_lily_duration_string(el.quarterLength)
+                    if isinstance(el, music21.chord.Chord):
+                        chord_pitches = " ".join(m21_pitch_to_lily(p) for p in el.pitches)
+                        tokens.append(f"<{chord_pitches}>{dur_str}")
+                    elif isinstance(el, music21.note.Note):
+                        tokens.append(f"{m21_pitch_to_lily(el.pitch)}{dur_str}")
+                    elif isinstance(el, music21.note.Rest):
+                        tokens.append(f"r{dur_str}")
 
         token_text = " ".join(tokens).strip()
         if token_text:
