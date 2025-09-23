@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Generated music artifacts
+*.ly
+*.midi
+*.midi.*
+*.pdf
+
+# Devcontainer runtime/log files
+.devcontainer/*.pid
+.devcontainer/*.log
+
+# VS Code
+.vscode/
