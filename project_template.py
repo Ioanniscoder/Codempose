@@ -1252,7 +1252,7 @@ def ql_to_lily_duration_string(ql: float) -> str:
 def m21_pitch_to_lily(p: music21.pitch.Pitch) -> str:
     return abjad.lilypond(abjad.NamedPitch(p.nameWithOctave))
 
-def engrave_with_abjad(parts: dict, output_file: str, prune_other: bool = False):
+def engrave_with_abjad(parts: dict, output_file: str, prune_other: bool = False, force: bool = False):
     # If one part provides global directives (time signature, key, tempo),
     # propagate them to any part that lacks them. This ensures consistent
     # engraving (same barlines and tempo) even when some parts were created
