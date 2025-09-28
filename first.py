@@ -1,231 +1,137 @@
+"""Template study file: richer `first.py` used as a starting point for
+experimentation and tests.
+
+This module exposes a primary LilyPond snippet constant (used by
+`main.py` when present) and also provides helpers that build a
+music21.Part so tests can import and call `build_part()` directly.
+
+Design goals:
+- Keep the file safe to import (no destructive side-effects).
+- Provide several example snippets (LilyPond and tinyNotation).
+- Provide `build_part()` which returns a music21.Part (used by
+  `main.py` when the study module exposes a `build_part()` function).
+- Provide a small example `add_harmony()` helper that demonstrates
+  how to transform the Part with music21 objects.
+
+Later the file can be installed (promoted) by an installer that
+replaces the working template; until then it remains read-only.
 """
-Eerste compositie: basisstructuur voor een nieuwe melodie
-Gebaseerd op project_template.py, maar minimalistisch en klaar voor eigen invulling.
-"""
 
-import argparse
-from pathlib import Path
+from typing import Dict, Optional
 
-import music21
-import abjad
+# Primary human-facing LilyPond snippet. `main.py` will prefer this
+# when present. Keep this concise and representative.
+SOURCE_MELODY_LILY = r"\relative e { \time 6/4 \key c \major \tempo 4=90 e2 bmol4 c2 r4 | e2 f#4 e2 r4 | b2. f'2. | e2. c2. | e2 b2 c2 }"
 
+# A small set of test snippets (both LilyPond and tinyNotation) that
+# are useful during development and automated tests.
+ALTERNATE_SNIPPETS: Dict[str, str] = {
+	'simple_lily': r"\relative c' { c4 d e f | g a b c }",
+	'melody_variant': r"\relative g' { e4 fs g a | b c d e }",
+	'tiny_example': "c4 d8 e f2 g4 a b c'",  # tinyNotation snippet
+}
 
-# Variant 1: LilyPond-snippet van E4 naar B3
-# Shorthand: plaats metrum, toonsoort en tempo in de snippet header zodat
-# zowel de parser als de gebruiker de basisinstellingen op één plek hebben.
-# Voorbeeld: \time 6/4, \key c \major, \tempo 4=90
-MELODY_SNIPPET = r"\relative e' { \time 6/4 \key c \major \tempo 4=90 e2 b c2 r | e2 f e2 r | b3 f3 | e3 c3 | e2 b c2 }"
-HARMONY_SNIPPET = "e2 b2 |<e g b>1"
-OUTPUT_BASENAME = "first_score"
+# A short harmony snippet used by the example transform below.
+HARMONY_SNIPPET = r"<e g b>2 <f a c'>2"
 
-# Variant 2: Python-lijst van noten
-MELODY_LIST = ["e4", "d4", "c4", "b3"]
-
-# Variant 3: Algoritmisch (stap omlaag per noot)
-def generate_stepwise_melody(start_note="e4", steps=4):
-    from music21 import note, stream
-    pitches = ["e4", "d4", "c4", "b3"]
-    part = stream.Part()
-    for p in pitches:
-        part.append(note.Note(p, quarterLength=1.0))
-    return part
-
-# Variant 4: Motief-variatie (herhaal motief, transpose)
-def generate_motif_variation(motif=["e4", "d4"], transpositions=[0, -2]):
-    from music21 import note, interval, stream
-    part = stream.Part()
-    for t in transpositions:
-        for p in motif:
-            n = note.Note(p, quarterLength=1.0)
-            if t != 0:
-                n = n.transpose(t)
-            part.append(n)
-    return part
+# Default output basename (main.py will override when --output passed).
+OUTPUT_BASENAME = 'first_score'
 
 
-def generate_harmony_from_melody(melody):
-    """Generate a simple triadic harmony under a melody.
+def get_snippets() -> Dict[str, str]:
+	"""Return a dictionary of available snippets for interactive use.
 
-    For each note in the melody we create a triad whose root is a third
-    below the melody note. The chord keeps the same duration as the melody
-    note so the parts align when engraved side-by-side.
-    """
-    from music21 import stream, note, chord, interval
-
-    harmony = stream.Part()
-    down_third = interval.Interval(-3)   # a third below the melody
-    tri_third = interval.Interval(3)
-    tri_fifth = interval.Interval(7)
-
-    for el in melody.flatten().notesAndRests:
-        if isinstance(el, note.Rest):
-            harmony.append(note.Rest(quarterLength=el.quarterLength))
-            continue
-
-        # choose reference pitch (for chords, take the highest pitch)
-        if isinstance(el, chord.Chord):
-            ref = el.pitches[-1]
-        else:
-            ref = el.pitch
-
-        root = ref.transpose(down_third)
-        third = root.transpose(tri_third)
-        fifth = root.transpose(tri_fifth)
-        ch = chord.Chord([root, third, fifth], quarterLength=el.quarterLength)
-        harmony.append(ch)
-
-    return harmony
+	This helper is convenient when you import the study module in a
+	REPL to inspect or to pick an example to build.
+	"""
+	d = {'primary': SOURCE_MELODY_LILY}
+	d.update(ALTERNATE_SNIPPETS)
+	return d
 
 
-def chordify_harmony(melody):
-    """Create harmony by chordifying the melody and producing triads per chord.
+def build_part(snippet: Optional[str] = None):
+	"""Build and return a music21.stream.Part from a snippet.
 
-    This groups simultaneous events into harmonic moments rather than
-    creating a triad for every single melodic note.
-    """
-    from music21 import stream, chord as m21chord
+	Behavior:
+	- If `snippet` is None, use `SOURCE_MELODY_LILY`.
+	- If `snippet` matches a key in `ALTERNATE_SNIPPETS`, use that
+	  stored snippet (tinyNotation or LilyPond style strings).
+	- Parsing is delegated to the existing pipeline helpers so the
+	  canonical data dict path is exercised.
 
-    harmony = stream.Part()
-    chordified = melody.chordify()
-    # iterate chord events and create a triad for each
-    for el in chordified.recurse().getElementsByClass(m21chord.Chord):
-        # determine a sensible root; prefer explicit root() if available
-        try:
-            root_pitch = el.root()
-        except Exception:
-            # fallback: use the bass pitch
-            root_pitch = el.bass()
-        # build triad (root, +3, +7)
-        tri = m21chord.Chord([root_pitch, root_pitch.transpose(3), root_pitch.transpose(7)])
-        # preserve the duration of the chordified event
-        tri.quarterLength = el.quarterLength
-        harmony.insert(el.offset, tri)
-    return harmony
+	Returns:
+		music21.stream.Part
+	"""
+	# Local import to avoid heavy startup cost when the file is merely
+	# inspected. These project helpers are available in the workspace.
+	from lilypond_parser import parse_lilypond_to_data
+	from music_data import data_to_part
 
-# Functies uit project_template.py hergebruiken
-import project_template as pt
+	use = snippet or SOURCE_MELODY_LILY
+	# If user passed a known key, resolve it
+	if isinstance(use, str) and use in ALTERNATE_SNIPPETS:
+		use = ALTERNATE_SNIPPETS[use]
 
+	# Use the robust parser implemented in this repository which
+	# returns the canonical data dict (metadata + parts)
+	score_data = parse_lilypond_to_data(use, part_name='Main Melody')
+	events = score_data.get('parts', {}).get('Main Melody')
+	if events is None:
+		raise RuntimeError('Parser did not return events for Main Melody')
 
-# output pruning is handled by the template engraver; keep this file focused
-# on the musical content and let project_template.py manage files.
+	# Convert canonical events to a music21 Part
+	part = data_to_part(events, metadata=score_data.get('metadata'))
 
+	# Example: attach parser diagnostics (if any) to the Part for
+	# callers to inspect programmatically.
+	warnings = score_data.get('metadata', {}).get('warnings') or []
+	suggestions = score_data.get('metadata', {}).get('suggestions') or []
+	# Attach as attributes (non-persistent) so calling code can see them
+	setattr(part, '_parse_warnings', warnings)
+	setattr(part, '_parse_suggestions', suggestions)
 
-def _propagate_global_directives(source_part, target_part):
-    """Ensure target_part has the same time signature, key, and tempo as source_part if missing."""
-    try:
-        # TimeSignature
-        from music21 import meter, tempo, key as m21key
-        ts_list = list(source_part.recurse().getElementsByClass(meter.TimeSignature))
-        if ts_list:
-            ts = ts_list[0]
-            existing_ts = list(target_part.recurse().getElementsByClass(meter.TimeSignature))
-            if not existing_ts:
-                target_part.insert(0, ts)
-        # Key
-        key_list = list(source_part.recurse().getElementsByClass(m21key.Key))
-        if key_list:
-            k = key_list[0]
-            existing_k = list(target_part.recurse().getElementsByClass(m21key.Key))
-            if not existing_k:
-                target_part.insert(0, k)
-        # Tempo (MetronomeMark)
-        tempo_list = list(source_part.recurse().getElementsByClass(tempo.MetronomeMark))
-        if tempo_list:
-            tm = tempo_list[0]
-            existing_tm = list(target_part.recurse().getElementsByClass(tempo.MetronomeMark))
-            if not existing_tm:
-                target_part.insert(0, tm)
-    except Exception:
-        # Non-fatal: if propagation fails, continue with engraving
-        pass
+	return part
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run first.py studies")
-    parser.add_argument("--mode", choices=["manual", "auto", "chordify", "both"], default="both",
-                        help="Which harmony mode to engrave: manual=use HARMONY_SNIPPET, auto=generate per-note harmony, chordify=grouped harmony, both=include both harmonies in a single score")
-    parser.add_argument("--force", action="store_true", help="Overwrite existing output files if present")
-    args = parser.parse_args()
+def add_harmony(base_part, harmony_snippet: Optional[str] = None):
+	"""Return a new music21.Score with the base part and a simple
+	harmony part (derived from a short snippet).
 
-    # Minimal run: parse Melody1 and keep other example blocks present but commented
-    print("--- Build: parse Melody1 and engrave single staff ---")
-    melody1 = pt.parse_lilypond_snippet(MELODY_SNIPPET)
-    harmony1 = pt.parse_lilypond_snippet(HARMONY_SNIPPET)
-    # from music21 import stream, note
-    # melody2 = stream.Part([note.Note(p, quarterLength=1.0) for p in MELODY_LIST])
-    # melody3 = generate_stepwise_melody()
-    # melody4 = generate_motif_variation()
+	This demonstrates how one might programmatically construct a
+	multi-part Score from the parsed melody.
+	"""
+	from music21 import stream
 
-    # Show parsed text for quick inspection
-    print("Melody1:")
-    try:
-        melody1.show('text')
-    except Exception:
-        pass
+	harmony_snip = harmony_snippet or HARMONY_SNIPPET
+	try:
+		# Use the same pipeline path to parse the harmony snippet
+		from lilypond_parser import parse_lilypond_to_data
+		from music_data import data_to_part
 
-    # ----------------------------------------
-    # Programmatic insertion (commented):
-    # Je kunt dezelfde instellingen ook via music21-inserties toevoegen.
-    # Dit geeft je de mogelijkheid om muziekprogramma's (algoritmen) te
-    # bouwen bovenop dezelfde basisinstelling die de snippet gebruikt.
-    # Voorbeeld (uncomment om te gebruiken):
-    # melody1 = pt.parse_lilypond_snippet(MELODY_SNIPPET)
-    # from music21 import meter, tempo, key
-    # # voeg maatsoort, tempo en key programmatic toe
-    # melody1.insert(0, meter.TimeSignature('6/4'))
-    # melody1.insert(0, tempo.MetronomeMark(number=90))
-    # melody1.insert(0, key.Key('C'))
-    # ----------------------------------------
+		hd = parse_lilypond_to_data(harmony_snip, part_name='Harmony')
+		h_events = hd.get('parts', {}).get('Harmony', [])
+		harmony_part = data_to_part(h_events, metadata=hd.get('metadata'))
+	except Exception:
+		# If parsing fails, build a small placeholder part
+		harmony_part = stream.Part()
 
-    # print("Melody2:")
-    # try:
-    #     melody2.show('text')
-    # except Exception:
-    #     pass
+	score = stream.Score()
+	score.append(base_part)
+	score.append(harmony_part)
+	return score
 
-    # Combine parts dictionary (only Melody1 active; other parts kept commented)
-    parts = {
-        "Melody1": melody1,
-         "Harmony": harmony1,
-        # "Melody2": melody2,
-        # "Melody3": melody3,
-        # "Melody4": melody4,
-    }
-    # Choose behavior based on CLI mode. Build the parts variable once and
-    # call the engraver a single time. If the output file already exists and
-    # --force is not provided, do nothing so the file remains unchanged.
-    out_pdf = Path("outputs") / f"{OUTPUT_BASENAME}.pdf"
 
-    parts_to_engrave = {"Melody1": melody1}
-    if args.mode == "manual":
-        parts_to_engrave["Harmony"] = harmony1
-    elif args.mode == "auto":
-        auto_harmony = generate_harmony_from_melody(melody1)
-        parts_to_engrave["AutoHarmony"] = auto_harmony
-    elif args.mode == "chordify":
-        chord_harmony = chordify_harmony(melody1)
-        parts_to_engrave["ChordHarmony"] = chord_harmony
-    else:  # both
-        # include both manual and auto harmonies in a single engraving
-        parts_to_engrave["Harmony"] = harmony1
-        auto_harmony = generate_harmony_from_melody(melody1)
-        parts_to_engrave["AutoHarmony"] = auto_harmony
+if __name__ == '__main__':
+	# Minimal interactive helper when executed directly: list snippets
+	print('first.py (template): available snippets:')
+	for k in get_snippets().keys():
+		print(' -', k)
 
-    # Ensure outputs dir exists and remove other basenames so only our
-    # chosen basename remains. This prevents stray artifacts from earlier
-    # runs from accumulating.
-    out_dir = Path("outputs")
-    out_dir.mkdir(parents=True, exist_ok=True)
+SOURCE_MELODY_LILY = r"\relative e { \time 6/4 \key c \major \tempo 4=90 e2 bmol4 c2 r4 | e2 f#4 e2 r4 | b2. f'2. | e2. c2. | e2 b2 c2 }"
+HARMONY_SNIPPET = r"e2 b2 <e g b>2"
+OUTPUT_BASENAME = 'first_score'
 
-    if out_pdf.exists() and not args.force:
-        print(f"Output exists ({out_pdf}). Use --force to overwrite. Leaving file unchanged.")
-    else:
-        # Propagate time/key/tempo from melody to any other parts that lack them
-        for name, part in list(parts_to_engrave.items()):
-            if name == "Melody1":
-                continue
-            _propagate_global_directives(melody1, part)
-
-        # Ask the template to prune other basenames so only this base name remains
-        pt.engrave_with_abjad(parts_to_engrave, OUTPUT_BASENAME, prune_other=True)
-        print(f"✅ PDF generated: {OUTPUT_BASENAME}.pdf")
+# Minimal CLI passthrough
+if __name__ == '__main__':
+	print('first.py: melody constant defined.')
+	FIRST_INSTALL_SNAPSHOT=1
