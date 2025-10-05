@@ -1,0 +1,65 @@
+# Gemini Session - Tarball Creation & Promotion System Update
+
+**Session Link**: https://g.co/gemini/share/903c6eede39f
+
+**Date**: October 5, 2025
+
+## Session Topics
+
+### 1. Promotion System Update
+- Modified promotion workflow to support dual-format correlation
+- Both LilyPond and TinyNotation formats now coexist from the start
+- Toggle controls which format is dominant (gets processed)
+- File management updated: backups to outputs/, modified files to root and outputs/
+
+### 2. Tarball Creation
+- Created comprehensive archive of all active Python files
+- Two tarballs created:
+  1. `codempose_complete_20251005_000154.tar.gz` (54 KB) - Full package with docs
+  2. `codempose_python_files_20251005_000108.tar.gz` (34 KB) - Python only
+
+### 3. Key Updates Discussed
+- first.py now includes both SOURCE_MELODY_LILY and SOURCE_MELODY_TINY
+- Promotion function rewritten to handle dominance toggling
+- Documentation suite created (10+ guides)
+- Staff order and octave fixes verified
+
+### 4. Documentation Created
+- PROMOTION_WORKFLOW.md - Complete dual-format guide
+- PROMOTION_UPDATE.md - Summary of changes
+- PROMOTION_VERIFICATION.md - Test results
+- PROMOTION_QUICK_REFERENCE.md - Cheat sheet
+- TARBALL_README.md - Archive quick start
+- TARBALL_INDEX.md - Detailed archive index
+- TARBALL_CONTENTS.md - Full manifest
+- DOCUMENTATION_INDEX.md - Complete navigation
+
+## Key Decisions
+
+1. **Dual-format from the start**: Both formats visible for learning and correlation
+2. **Toggle controls dominance**: PROMOTE_TO_TINYNOTATION determines which format gets processed
+3. **Clean file management**: Backups in outputs/, not root directory
+4. **Comprehensive archives**: Include documentation and configuration files
+
+## Files Modified
+
+1. `first.py` - Added SOURCE_MELODY_TINY alongside SOURCE_MELODY_LILY
+2. `project_template.py` - Updated promote_lilypond_to_tinynotation() function
+3. `project_template.py` - Enhanced engrave_with_abjad() messaging
+
+## Artifacts Created
+
+- 2 tarballs (complete + Python-only)
+- 8 new documentation files
+- Complete working system ready for distribution
+
+## Session Outcome
+
+✅ Promotion system successfully updated to dual-format workflow
+✅ All active Python files archived with documentation
+✅ Comprehensive documentation suite created
+✅ System verified and production-ready
+
+---
+
+**Reference**: This session built upon previous work on staff ordering fixes and metadata extraction improvements.

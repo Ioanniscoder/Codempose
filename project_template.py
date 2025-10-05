@@ -1,781 +1,12 @@
+# project_template.py
+
 import music21
 import abjad
 from pathlib import Path
 import subprocess
-import datetime
-import os
 import re
-
-
-def part_from_input(inp):
-    """
-    Creates a music21 Part from a music21.Part or a TinyNotation string.
-    This function is intentionally simple and does not parse LilyPond.
-    """
-    if isinstance(inp, music21.stream.Part):
-        return inp
-    if isinstance(inp, str) and (inp.lower().startswith('tinynotation:') or inp.lower().startswith('tiny:')):
-        return music21.converter.parse(inp)
-    if isinstance(inp, str):
-        return music21.converter.parse(f"tinynotation: {inp}")
-    raise TypeError(f"Unsupported input type for part_from_input: {type(inp)}")
-
-
-def part_to_tinynotation(part: music21.stream.Part) -> str:
-    """
-    Produces a conservative tinyNotation string from a music21 Part for logging.
-    """
-    from music21 import meter
-
-    # find time signature if present
-    ts = None
-    for el in part.recurse():
-        if isinstance(el, meter.TimeSignature):
-            ts = el
-            break
-    ts_text = ts.ratioString if ts is not None else '4/4'
-
-    tokens = []
-    for el in part.flatten().notesAndRests:
-        ql = getattr(el, 'quarterLength', 1.0) or 1.0
-        # approximate duration token
-        dens = [1, 2, 4, 8, 16, 32]
-        den = min(dens, key=lambda d: abs(ql - (4.0 / d)))
-        # dotted check
-        base = 4.0 / den
-        dur = str(den)
-        if abs(ql - base * 1.5) < abs(ql - base):
-            dur = dur + '.'
-        if getattr(el, 'isRest', False):
-            tokens.append(f"r{dur}")
-        else:
-            try:
-                pname = el.pitch.nameWithOctave
-            except Exception:
-                pname = str(el)
-            tokens.append(f"{pname.lower()}{dur}")
-
-    return f"tinynotation: {ts_text} {' '.join(tokens)}"
-
-
-def chordify_harmony(melody: music21.stream.Part) -> music21.stream.Part:
-    from music21 import stream, chord as m21chord, note
-
-    harmony = stream.Part()
-    chordified = melody.chordify()
-    total_len = 0.0
-    for el in melody.flatten().notesAndRests:
-        total_len = max(total_len, getattr(el, 'offset', 0) + getattr(el, 'quarterLength', 0))
-
-    events = sorted(chordified.recurse().getElementsByClass(m21chord.Chord), key=lambda e: e.offset)
-    cur = 0.0
-    for el in events:
-        if el.offset > cur + 1e-8:
-            gap = el.offset - cur
-            harmony.append(note.Rest(quarterLength=gap))
-            cur += gap
-        try:
-            root_pitch = el.root()
-        except Exception:
-            root_pitch = el.bass()
-        tri = m21chord.Chord([root_pitch, root_pitch.transpose(3), root_pitch.transpose(7)])
-        tri.quarterLength = el.quarterLength
-        harmony.insert(el.offset, tri)
-        cur = max(cur, el.offset + el.quarterLength)
-    if cur < total_len - 1e-8:
-        harmony.append(note.Rest(quarterLength=(total_len - cur)))
-    return harmony
-
-
-def _sanitize_comment_text(s: str, max_line=200) -> str:
-    if s is None:
-        return ''
-    # normalize and remove control chars except newline
-    s = str(s).expandtabs()
-    s = re.sub(r"[\x00-\x08\x0b-\x1f]+", '', s)
-    # break into lines and prefix with %
-    lines = []
-    for line in s.splitlines():
-        if len(line) > max_line:
-            line = line[:max_line] + '...'
-        lines.append('% ' + line)
-    if not lines:
-        return '% '
-    return '\n'.join(lines) + '\n'
-
-
-def _safe_write_text(path: Path, text: str):
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    with tmp.open('w', encoding='utf8') as fh:
-        fh.write(text)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(str(tmp), str(path))
-
-
-def _final_sanitize_ly_text(s: str) -> str:
-    """Sanitize final LilyPond text before writing to disk.
-
-    Removes control characters except newline (\n), carriage return (\r)
-    and tab (\t) which are safe to preserve. This prevents hidden bytes
-    (e.g. vertical tab 0x0B) from appearing in the .ly which can break
-    LilyPond's parser.
-    """
-    if s is None:
-        return ''
-    # remove control chars except \n (0x0a), \r (0x0d), \t (0x09)
-    out = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]+", '', str(s))
-    # remove literal ellipsis sequences which are not valid music tokens
-    out = out.replace('...', '')
-    # Normalize certain accidental spellings that have been observed in
-    # emitted token streams (e.g. 'ees' -> 'es'). Match only when the
-    # accidental appears as a standalone token or is followed by an octave
-    # mark, digit, comma, apostrophe, or closing bracket so we don't mangle
-    # incidental text in comments.
-    try:
-        out = re.sub(r"\bees(?=[,\'\s>\d])", 'es', out, flags=re.IGNORECASE)
-    except Exception:
-        out = out.replace('ees', 'es')
-    return out
-
-# NOTE: The old simplified `engrave_with_abjad(parts, ...)` implementation
-# that emitted a tiny placeholder .ly lived here in earlier commits. It
-# was removed because the module now provides a single, robust engraver
-# (see the `engrave_with_abjad(score_data: dict, ...)` function further
-# down) and a compatibility wrapper `_score_data_from_parts_dict` which
-# converts legacy name->music21.Part mappings into the canonical
-# `score_data` dict expected by the decoupled engraver.
-
-
-def snapshot_composition(tinynotation_data: str, history: list[str], lily_source: str) -> str:
-    history_comments = '\n# '.join(history)
-    timestamp = datetime.datetime.now().isoformat()
-    header = f'"""\nAuto-generated snapshot\nTimestamp: {timestamp}\nSource lily: {lily_source}\n# {history_comments}\n"""\n\n'
-    # A minimal script template; study files can expand this
-    body = header + 'import project_template as pt\n\n# Rest of the generated script goes here\n'
-    return body
-"""
-LilyPond ↔ music21 Hybrid (chords preserved & dotted durations)
-===============================================================
-- This version contains a robust parser that correctly handles chords and \relative mode.
-"""
-import re
-import music21
-import abjad
-from pathlib import Path
-import subprocess
 from fractions import Fraction
-from typing import List
-import lilypond_parser as lp
 
-# Configuration toggles (adjustable by study files)
-RELATIVE_OCTAVE_POLICY = 'nearest'  # 'nearest' or 'fixed'
-EXPLICIT_OCTAVE_AFFECTS_CONTEXT = False
-
-
-def set_relative_octave_policy(policy: str):
-    """Set relative octave resolution policy used by the parser.
-
-    Accepts 'nearest' (default) or 'fixed'.
-    """
-    global RELATIVE_OCTAVE_POLICY
-    if policy not in ('nearest', 'fixed'):
-        raise ValueError("policy must be 'nearest' or 'fixed'")
-    RELATIVE_OCTAVE_POLICY = policy
-
-
-def set_explicit_octave_affects_context(value: bool):
-    """Set whether explicit octave markers (,' ) affect subsequent relative context."""
-    global EXPLICIT_OCTAVE_AFFECTS_CONTEXT
-    EXPLICIT_OCTAVE_AFFECTS_CONTEXT = bool(value)
-
-
-def _get_tokens(body: str) -> List[str]:
-    """Tokenize a LilyPond body into note/chord/rest/| tokens.
-
-    This is a conservative tokenizer used by the relative/absolute
-    parsers elsewhere in the module.
-    """
-    # Recognize chord tokens, note tokens with various accidental spellings
-    # (is, es, mol, bemol, #, unicode sharps/flats), optional octave marks
-    # and optional duration. Also recognize backslash commands and barlines.
-    token_regex = r"<[^>]+>\d*\.?|[a-gr](?:is|es|mol|bemol|#|\u266f|\u266d|b)?[,']*\d*\.?|\\[a-zA-Z]+|\|"
-    return re.findall(token_regex, body, flags=re.IGNORECASE)
-
-
-def parse_lilypond_snippet(snippet: str) -> music21.stream.Part:
-    """Parse a LilyPond snippet string into a music21.stream.Part.
-
-    Supports absolute tokens and a simple form of \relative blocks
-    (single-line or multi-line content inside braces).
-    """
-    # Detect relative mode: \relative <base> { <body> }
-    m = re.match(r"\\relative\s+([a-g][eis]*[,']*)\s*\{(.+)\}", snippet, re.DOTALL)
-    if m:
-        base_pitch = m.group(1).strip()
-        body = m.group(2).strip()
-        part = _parse_relative_block(base_pitch, body)
-        try:
-            part._original_snippet = snippet
-        except Exception:
-            pass
-        return part
-    else:
-        return _parse_absolute_block(snippet)
-
-
-def _parse_relative_block(base_pitch: str, body: str) -> music21.stream.Part:
-    part = music21.stream.Part()
-    ref_note = _parse_note_token(base_pitch)
-    if not isinstance(ref_note, music21.note.Note):
-        raise ValueError(f"Invalid base pitch for relative: {base_pitch}")
-
-    last_pitch = ref_note.pitch
-    # If the \\relative base was provided without explicit octave markers
-    # (no apostrophes or commas), nudge the reference down one octave. This
-    # better matches common folk-usage where an unmarked base refers to a
-    # mid-register pitch and prevents an immediate upward octave resolution
-    # that pushes subsequent notes an octave too high.
-    try:
-        if not re.search(r"[,']", base_pitch):
-            last_pitch.octave = int(last_pitch.octave) - 1
-    except Exception:
-        pass
-    # Strip common Lily directives (time/key/tempo/clef) from the body so
-    # their arguments (e.g. the 'c' in '\\key c \\major') are not
-    # mistaken for musical note tokens by the tokenizer.
-    try:
-        body_clean = re.sub(r"\\time\s+\d+/\d+", "", body, flags=re.IGNORECASE)
-        body_clean = re.sub(r"\\key\s+[a-gA-G][a-zA-Z#\u266f\u266d-]*\s+(?:major|minor)?", "", body_clean, flags=re.IGNORECASE)
-        body_clean = re.sub(r"\\tempo\s+[^\s]+", "", body_clean, flags=re.IGNORECASE)
-        body_clean = re.sub(r"\\clef\s+\w+", "", body_clean, flags=re.IGNORECASE)
-    except Exception:
-        body_clean = body
-    # Normalize localized accidentals and ASCII sharps so the tokenizer
-    # recognizes tokens like 'bmol4' or 'f#4' as single note tokens.
-    try:
-        body_norm = _normalize_lily_for_abjad(body_clean)
-    except Exception:
-        body_norm = body_clean
-    tokens = _get_tokens(body_norm) # Use the new, robust tokenizer
-    # Normalize tokens: if a note/rest/chord token lacks an explicit
-    # duration, append a default quarter-note duration '4'. This makes
-    # snippet format deterministic and avoids surprises from implicit
-    # durations in relative mode.
-    norm_tokens = []
-    for tok in tokens:
-        if tok == '|' or tok.startswith('\\'):
-            norm_tokens.append(tok)
-            continue
-        if tok.startswith('<'):
-            # chord token; add duration if missing
-            if not re.search(r">\d", tok):
-                tok = tok.rstrip() + '4'
-            norm_tokens.append(tok)
-            continue
-        # rest or single note without explicit digits
-        m_no_dur = re.fullmatch(r"([a-gr][eis]*[,']*)", tok)
-        m_rest = re.fullmatch(r"(r)", tok)
-        if m_no_dur:
-            norm_tokens.append(tok + '4')
-            continue
-        if m_rest:
-            norm_tokens.append(tok + '4')
-            continue
-        norm_tokens.append(tok)
-    tokens = norm_tokens
-
-    for tok in tokens:
-        if tok.startswith("<"):
-            element = _parse_chord_token(tok, last_pitch)
-            if element:
-                # Update last_pitch to the top note of the chord for correct relative context
-                # (chords are treated as explicit context changes)
-                last_pitch = element.pitches[-1]
-                part.append(element)
-        else:
-            element = _resolve_relative(tok, last_pitch)
-            if element:
-                # If the token contains explicit octave marks and the project
-                # policy says explicit marks should not affect subsequent
-                # relative context, do not update last_pitch here.
-                has_mark = bool(re.search(r"[,']", tok))
-                if isinstance(element, music21.note.Note):
-                    if not (has_mark and not EXPLICIT_OCTAVE_AFFECTS_CONTEXT):
-                        last_pitch = element.pitch
-                part.append(element)
-    return part
-
-def _parse_absolute_block(snippet: str) -> music21.stream.Part:
-    part = music21.stream.Part()
-    # Strip common Lily directives (time/key/tempo/clef) from the snippet
-    # before tokenizing so directive arguments are not treated as notes.
-    try:
-        s_clean = re.sub(r"\\time\s+\d+/\d+", "", snippet, flags=re.IGNORECASE)
-        s_clean = re.sub(r"\\key\s+[a-gA-G][a-zA-Z#\u266f\u266d-]*\s+(?:major|minor)?", "", s_clean, flags=re.IGNORECASE)
-        s_clean = re.sub(r"\\tempo\s+[^\s]+", "", s_clean, flags=re.IGNORECASE)
-        s_clean = re.sub(r"\\clef\s+\w+", "", s_clean, flags=re.IGNORECASE)
-    except Exception:
-        s_clean = snippet
-    try:
-        snippet_norm = _normalize_lily_for_abjad(s_clean)
-    except Exception:
-        snippet_norm = s_clean
-    tokens = _get_tokens(snippet_norm) # Use the new, robust tokenizer
-    # Normalize tokens to ensure a clear format: attach default '4' where
-    # a duration is missing on a note/rest/chord.
-    norm_tokens = []
-    for tok in tokens:
-        if tok == '|' or tok.startswith('\\'):
-            norm_tokens.append(tok)
-            continue
-        if tok.startswith('<'):
-            if not re.search(r">\d", tok):
-                tok = tok.rstrip() + '4'
-            norm_tokens.append(tok)
-            continue
-        m_no_dur = re.fullmatch(r"([a-gr][eis]*[,']*)", tok)
-        m_rest = re.fullmatch(r"(r)", tok)
-        if m_no_dur:
-            norm_tokens.append(tok + '4')
-            continue
-        if m_rest:
-            norm_tokens.append(tok + '4')
-            continue
-        norm_tokens.append(tok)
-    tokens = norm_tokens
-    for tok in tokens:
-        if tok.startswith("<"):
-            element = _parse_chord_token(tok)
-            if element:
-                part.append(element)
-        else:
-            element = _parse_note_token(tok)
-            if element:
-                part.append(element)
-    return part
-
-def _resolve_relative(tok: str, last_pitch: music21.pitch.Pitch, ql: float = None):
-    n = _parse_note_token(tok, ql)
-    if isinstance(n, music21.note.Note):
-        cand = n.pitch
-        # If the token contains explicit octave markers (apostrophes or commas)
-        # then _parse_note_token already applied them. Respect explicit marks.
-        has_mark = bool(re.search(r"[,']", tok))
-        if has_mark:
-            # honor explicit octave markers exactly
-            n.pitch = cand
-            return n
-
-        if RELATIVE_OCTAVE_POLICY == 'fixed':
-            # keep the octave equal to reference to avoid nearest-octave jumps
-            cand.octave = last_pitch.octave
-        else:
-            # default/nearest behavior: choose the octave for the candidate
-            # that minimizes the absolute semitone distance to the last
-            # pitch. This is a faithful "nearest" rule that considers
-            # octave transpositions rather than relying on the parsed
-            # candidate octave alone.
-            try:
-                best = None
-                best_diff = None
-                # search octave shifts in a reasonable window
-                for shift in range(-6, 7):
-                    try:
-                        trial = music21.pitch.Pitch(cand.nameWithOctave)
-                        trial.octave = cand.octave + shift
-                    except Exception:
-                        # Fall back to constructing from components
-                        trial = music21.pitch.Pitch()
-                        trial.step = cand.step
-                        trial.octave = int(getattr(cand, 'octave', 4)) + shift
-                        try:
-                            acc = getattr(cand, 'accidental', None)
-                            if acc is not None:
-                                trial.accidental = music21.pitch.Accidental(getattr(acc, 'alter', 0))
-                        except Exception:
-                            pass
-                    diff = abs(trial.ps - last_pitch.ps)
-                    if best_diff is None or diff < best_diff:
-                        best_diff = diff
-                        best = trial
-                if best is not None:
-                    cand = best
-            except Exception:
-                # fallback to previous simple heuristic if anything goes wrong
-                while cand.ps - last_pitch.ps > 6:
-                    cand.octave -= 1
-                while last_pitch.ps - cand.ps > 6:
-                    cand.octave += 1
-        n.pitch = cand
-    return n
-
-def _parse_duration(dur_token: str) -> float:
-    if not dur_token: return 1.0
-    base = int(re.sub(r"\D", "", dur_token))
-    ql = 4 / base
-    if "." in dur_token: ql *= 1.5
-    return ql
-
-def _parse_note_token(tok: str, ql: float = None):
-    # Match a note token with optional accidental and octave marks
-    m = re.match(r"(?P<step>[a-g])(?P<acc>(?:is|es|mol|bemol|#|\u266f|\u266d|b)?)(?P<oct>[,']*)(?P<dur>\d+\.?)?", tok, flags=re.IGNORECASE)
-    if not m:
-        # maybe a rest token like 'r4'
-        m2 = re.match(r"(r)(\d+\.?)?", tok, flags=re.IGNORECASE)
-        if m2:
-            dur_token = m2.group(2)
-            if ql is None: ql = _parse_duration(dur_token)
-            return music21.note.Rest(quarterLength=ql)
-        return None
-    step = m.group('step').upper()
-    acc_token = (m.group('acc') or '').lower()
-    oct_marks = m.group('oct') or ''
-    dur_token = m.group('dur')
-    if ql is None:
-        ql = _parse_duration(dur_token)
-
-    # Map accidental token to music21 accidental sign
-    acc = ''
-    if acc_token in ('is', '#'):
-        acc = '#'
-    elif acc_token in ('es', 'b', 'mol', 'bemol', '\u266d'):
-        acc = '-'
-    elif acc_token in ('\u266f',):
-        acc = '#'
-
-    octave_shift = oct_marks.count("'") - oct_marks.count(",")
-    octave = 4 + octave_shift
-    n = music21.note.Note(f"{step}{acc}{octave}", quarterLength=ql)
-    # Preserve the original pitch token (e.g. "f'" or "c,") so we can
-    # prefer this textual form when emitting LilyPond tokens later. This
-    # helps keep explicit octave marks exactly as the user wrote them.
-    try:
-        # store the original pitch substring (step + accidental + octave markers)
-        n._orig_pitch_token = step.lower() + (acc_token or '') + (oct_marks or '')
-    except Exception:
-        pass
-    try:
-        # store the full normalized token (including duration) so emission
-        # can reproduce the exact user-supplied text when available
-        n._orig_token = tok
-    except Exception:
-        pass
-    return n
-
-def _parse_chord_token(tok: str, last_pitch: music21.pitch.Pitch = None):
-    m = re.fullmatch(r"<([^>]*)>(\d+\.?)?", tok)
-    if not m: return None
-    chord_body, dur_token = m.groups()
-    ql = _parse_duration(dur_token)
-    chord_pitches = []
-    
-    # Use a temporary last_pitch for resolving notes inside the chord
-    temp_last_pitch = last_pitch
-    for t in chord_body.split():
-        if last_pitch: # Relative mode
-            n = _resolve_relative(t, temp_last_pitch, ql)
-            if isinstance(n, music21.note.Note):
-                temp_last_pitch = n.pitch
-                chord_pitches.append(n.pitch)
-        else: # Absolute mode
-            n = _parse_note_token(t, ql)
-            if isinstance(n, music21.note.Note):
-                chord_pitches.append(n.pitch)
-    if chord_pitches:
-        ch = music21.chord.Chord(chord_pitches, quarterLength=ql)
-        try:
-            ch._orig_chord_body = chord_body
-        except Exception:
-            pass
-        try:
-            # store the full token (e.g. "<c e g>4") for verbatim emission when
-            # engraving the Lily tokens later
-            ch._orig_token = tok
-        except Exception:
-            pass
-        return ch
-    return None
-
-
-# -----------------------------------------------------------------
-# High-level input helpers
-# -----------------------------------------------------------------
-def _convert_duration_input(d):
-    """Convert common duration representations to quarterLength.
-
-    Accepts int/float (treated as ql), or strings like '4', '8.', or '0.5'.
-    """
-    if d is None:
-        return 1.0
-    if isinstance(d, (int, float)):
-        return float(d)
-    if isinstance(d, str):
-        s = d.strip()
-        # dotted forms
-        dotted = s.endswith('.')
-        if dotted:
-            s_base = s[:-1]
-        else:
-            s_base = s
-        # try integer denominator like '4' -> quarter
-        try:
-            den = int(s_base)
-            ql = 4.0 / float(den)
-            if dotted:
-                ql *= 1.5
-            return ql
-        except Exception:
-            try:
-                return float(s)
-            except Exception:
-                raise ValueError(f"Unsupported duration input: {d}")
-    raise ValueError(f"Unsupported duration input type: {type(d)}")
-
-
-def part_from_input(inp):
-    """Create a music21 Part from a supported input form.
-
-    Supported input types:
-    - music21.stream.Part: returned unchanged
-    - LilyPond snippet (string containing backslashes or starting with '\relative'): parsed with parse_lilypond_snippet
-    - tinyNotation string (prefix 'tiny:' or 'tinynotation:') or bare tiny tokens: parsed with music21.converter.parse('tinynotation: ...')
-
-    Note: Python-level pitch-lists (lists/tuples of pitch strings) are intentionally
-    unsupported. Please provide LilyPond shorthand or tinyNotation so the same
-    human-editable format is used across study files. If you need programmatic
-    generation, return a music21.stream.Part from your generator and pass that
-    Part directly to this function.
-    """
-    from music21 import stream, note, converter
-
-    # already a Part
-    if isinstance(inp, music21.stream.Part):
-        return inp
-
-    # strings: detect tinynotation vs lilypond
-    if isinstance(inp, str):
-        s = inp.strip()
-        low = s.lower()
-        # explicit tinyNotation prefix
-        if low.startswith('tinynotation:') or low.startswith('tiny:'):
-            try:
-                # ensure converter sees the right format
-                if low.startswith('tinynotation:'):
-                    return converter.parse(s)
-                else:
-                    body = s.split(':', 1)[1].strip()
-                    return converter.parse('tinynotation: ' + body)
-            except Exception:
-                # fallback to lily parser
-                return parse_lilypond_snippet(s)
-
-        # Heuristic: if it contains backslash tokens or Lily-like markers, assume Lily
-        if '\\' in s or s.startswith('\\relative') or '<' in s or '|' in s:
-            # Prefer the new robust LilyPond -> tinyNotation parser when available.
-            try:
-                tn = lp.parse_lilypond_to_tinynotation(s)
-                from music21 import converter
-                # Parse the generated tinyNotation string into a music21 Part
-                part = converter.parse('tinynotation: ' + tn)
-                try:
-                    # preserve original snippet for engraving comments/fallbacks
-                    part._original_snippet = s
-                except Exception:
-                    pass
-                return part
-            except Exception:
-                # Fallback to the older parser if the new parser fails
-                return parse_lilypond_snippet(s)
-
-        # Otherwise try tinyNotation and fall back to lilypond
-        try:
-            return converter.parse('tinynotation: ' + s)
-        except Exception:
-            return parse_lilypond_snippet(s)
-
-    # Explicit pitch-lists are not accepted. This keeps repository inputs
-    # consistent (LilyPond or tinyNotation) and avoids a second, divergent
-    # input format. If a caller passes a list/tuple, raise with a helpful
-    # message explaining the preferred alternatives.
-    if isinstance(inp, (list, tuple)):
-        raise TypeError(
-            "Pitch-list inputs (list/tuple of pitches) are deprecated and not supported. "
-            "Please supply LilyPond shorthand or tinyNotation strings, or return a "
-            "music21.stream.Part from your programmatic generator and pass that Part."
-        )
-
-    raise TypeError(f"Unsupported input type for part_from_input: {type(inp)}")
-
-
-def part_to_tinynotation(part: music21.stream.Part) -> str:
-    """Produce a conservative tinyNotation string from a music21 Part.
-
-    This mirrors the earlier helper but lives in the template so study
-    files can request a tinyNotation representation consistently.
-    """
-    from music21 import meter
-
-    # find time signature if present
-    ts = None
-    for el in part.recurse():
-        if isinstance(el, meter.TimeSignature):
-            ts = el
-            break
-    ts_text = ts.ratioString if ts is not None else '4/4'
-
-    # find key if present
-    key_text = None
-    try:
-        from music21 import key as m21key, tempo as m21tempo
-        klist = list(part.recurse().getElementsByClass(m21key.Key))
-        if klist:
-            k = klist[0]
-            key_text = f"key {k.tonic.name.lower()} {('major' if k.mode=='major' else 'minor')}"
-    except Exception:
-        key_text = None
-
-    # find tempo if present
-    tempo_text = None
-    try:
-        tlist = list(part.recurse().getElementsByClass(m21tempo.MetronomeMark))
-        if tlist:
-            tm = tlist[0]
-            if tm.number:
-                # numeric bpm
-                tempo_text = f"tempo {int(tm.number)}"
-            elif tm.getText():
-                tempo_text = f"tempo {tm.getText()}"
-    except Exception:
-        tempo_text = None
-
-    def ql_to_den_token(ql):
-        dens = [1, 2, 4, 8, 16, 32]
-        for den in dens:
-            base = 4.0 / den
-            if abs(ql - base) < 1e-6:
-                return str(den)
-            if abs(ql - base * 1.5) < 1e-6:
-                return f"{den}."
-        best = min(dens, key=lambda d: abs(ql - (4.0 / d)))
-        base = 4.0 / best
-        if abs(ql - base * 1.5) < abs(ql - base):
-            return f"{best}."
-        return str(best)
-
-    tokens = []
-    for el in part.flatten().notesAndRests:
-        ql = el.quarterLength
-        dur_token = ql_to_den_token(ql)
-        if el.isRest:
-            tokens.append(f"r{dur_token}")
-        else:
-            try:
-                pname = el.pitch.nameWithOctave
-            except Exception:
-                pname = str(el)
-            # If the pitch text contains an explicit octave digit (e.g. 'E3'),
-            # emit a separating space before the duration so tokens remain
-            # searchable (e.g. 'e3 2' rather than 'e32'). For simple pitch
-            # names without octave markers (e.g. 'e'), keep the compact form
-            # 'e4' as before.
-            if any(ch.isdigit() for ch in pname):
-                tokens.append(f"{pname.lower()} {dur_token}")
-            else:
-                tokens.append(f"{pname.lower()}{dur_token}")
-
-    header_parts = [ts_text]
-    if key_text:
-        header_parts.append(key_text)
-    if tempo_text:
-        header_parts.append(tempo_text)
-    header = ' '.join(header_parts)
-    return f"tinynotation: {header} {' '.join(tokens)}"
-
-
-def emit_lily_tokens_from_part(part: music21.stream.Part) -> str:
-    """Produce a Lily token stream from a music21 Part using the same
-    conservative rules the template uses when building token_text for
-    engraving. Returns a single string containing tokens (ready to be
-    written inside a Staff or a \relative block).
-    """
-    toks = []
-    for el in part.flatten().notesAndRests:
-        try:
-            ql = getattr(el, 'quarterLength', 1.0) or 1.0
-            dur = ql_to_lily_duration_string(ql)
-        except Exception:
-            dur = ql_to_lily_duration_string(1.0)
-
-        if getattr(el, 'isRest', False):
-            toks.append(f"r{dur}")
-            continue
-
-        if isinstance(el, music21.chord.Chord):
-            # Emit chord body using canonical pitch tokens
-            chord_pitches = " ".join(m21_pitch_to_lily(p) for p in el.pitches)
-            toks.append(f"<{chord_pitches}>{dur}")
-            continue
-
-        if isinstance(el, music21.note.Note):
-            pitch_text = m21_pitch_to_lily(el.pitch)
-            toks.append(f"{pitch_text}{dur}")
-            continue
-
-    return " ".join(toks)
-
-
-def chordify_harmony(melody: music21.stream.Part) -> music21.stream.Part:
-    """Create a chordified harmony part from a melody.
-
-    This groups simultaneous events into harmonic moments (chords) and
-    returns a music21 Part where gaps are filled with rests so durations
-    align with the source melody. This is useful for engraving chordified
-    harmony alongside a melody and ensures measure alignment.
-    """
-    from music21 import stream, chord as m21chord, note
-
-    harmony = stream.Part()
-    chordified = melody.chordify()
-
-    # compute total length of the source melody so we can pad at the end
-    total_len = 0.0
-    for el in melody.flatten().notesAndRests:
-        total_len = max(total_len, getattr(el, 'offset', 0) + getattr(el, 'quarterLength', 0))
-
-    # collect chord events and sort by offset
-    events = sorted(chordified.recurse().getElementsByClass(m21chord.Chord), key=lambda e: e.offset)
-
-    cur = 0.0
-    for el in events:
-        # if there's a gap before this chord, insert a rest to fill it
-        if el.offset > cur + 1e-8:
-            gap = el.offset - cur
-            harmony.append(note.Rest(quarterLength=gap))
-            cur += gap
-
-        # determine a sensible root; prefer explicit root() if available
-        try:
-            root_pitch = el.root()
-        except Exception:
-            # fallback: use the bass pitch
-            root_pitch = el.bass()
-        # build triad (root, +3, +7)
-        tri = m21chord.Chord([root_pitch, root_pitch.transpose(3), root_pitch.transpose(7)])
-        # preserve the duration of the chordified event
-        tri.quarterLength = el.quarterLength
-        harmony.insert(el.offset, tri)
-        cur = max(cur, el.offset + el.quarterLength)
-
-    # pad final gap to match melody total length
-    if cur < total_len - 1e-8:
-        harmony.append(note.Rest(quarterLength=(total_len - cur)))
-
-    return harmony
-
-# ==============================
-# music21 → Abjad/LilyPond export
-# ==============================
 def ql_to_lily_duration_string(ql: float) -> str:
     # Try the exact representation first (fraction of whole note)
     frac = Fraction(ql).limit_denominator(1024)
@@ -802,2031 +33,1121 @@ def ql_to_lily_duration_string(ql: float) -> str:
             print(f"[warning] approximate duration: requested ql={ql} approximated as {ql_candidate} (LilyPond: {dur_str}); diff={diff}")
         return dur_str
 
+def _parse_token(tok: str):
+    if tok.lower().startswith('r'):
+        m = re.match(r"r(\d+\.?)", tok, re.IGNORECASE)
+        dur_token = m.group(1) if m else '4'
+        ql = 4.0 / float(dur_token.replace('.', ''))
+        if '.' in dur_token: ql *= 1.5
+        return music21.note.Rest(quarterLength=ql)
 
-def _normalize_lily_for_abjad(s: str) -> str:
-    """Normalize a LilyPond token string so Abjad's parser accepts
-    localized accidentals and common ASCII forms.
+    m = re.match(r"(?P<step>[a-g])(?P<acc>(?:is|es|s|b|#)?)(?P<oct>[,']*)(?P<dur>\d+\.?)?", tok, flags=re.IGNORECASE)
+    if not m: return None
+    
+    data = m.groupdict()
+    p = music21.pitch.Pitch(data['step'])
+    acc_str = (data['acc'] or '').lower()
+    if 'is' in acc_str or '#' in acc_str: p.accidental = '#'
+    if 'es' in acc_str or 's' in acc_str: p.accidental = 'b'
+    if 'b' in acc_str: p.accidental = 'b'
+    
+    p.octave = 4 + (data['oct'] or '').count("'") - (data['oct'] or '').count(",")
+    dur_token = data['dur'] or '4'
+    ql = 4.0 / float(dur_token.replace('.', ''))
+    if '.' in dur_token: ql *= 1.5
+    return music21.note.Note(p, quarterLength=ql)
 
-    Examples:
-    - 'bmol' or 'bemol' -> 'bes' (B-flat)
-    - 'f#' -> 'fis' (F-sharp)
-    - Unicode ♯/♭ -> 'is'/'es'
-    This normalization is only applied to strings being fed to Abjad's
-    parser; the original snippet text written to the .ly file is left
-    unchanged for fidelity.
-    """
-    import re
+def _resolve_relative(tok: str, last_pitch: music21.pitch.Pitch):
+    element = _parse_token(tok)
+    if not isinstance(element, music21.note.Note) or "'" in tok or "," in tok:
+        return element
+    element.pitch.octave = last_pitch.octave
+    interval = music21.interval.Interval(last_pitch, element.pitch)
+    if interval.direction == music21.interval.Direction.ASCENDING and interval.semitones > 6:
+        element.pitch.octave -= 1
+    elif interval.direction == music21.interval.Direction.DESCENDING and interval.semitones < -6:
+        element.pitch.octave += 1
+    return element
+    
+def parse_lilypond_snippet(snippet: str) -> music21.stream.Part:
+    part = music21.stream.Part()
+    relative_match = re.match(r"\\relative\s+([a-g][^ ]*)?\s*\{(.*)\}", snippet, re.DOTALL | re.IGNORECASE)
+    if not relative_match: raise ValueError("Parser requires a \\relative block.")
+    base_note_str, body = relative_match.groups()
+    body = re.sub(r"\\(time|key|major|minor|tempo)\s+[^|\s}]+", "", body, re.IGNORECASE)
+    body = body.replace("bmol", "b").replace("f#", "fis")
+    tokens = [tok for tok in body.split() if tok != '|']
+    last_note = _parse_token(base_note_str)
+    if not isinstance(last_note, music21.note.Note): raise ValueError(f"Invalid base note: {base_note_str}")
+    last_pitch = last_note.pitch
+    for tok in tokens:
+        element = _resolve_relative(tok, last_pitch)
+        if element:
+            part.append(element)
+            if isinstance(element, music21.note.Note): last_pitch = element.pitch
+    return part
 
-    if not s:
-        return s
+def engrave_with_abjad(score_data: dict, output_basename: str, source_file: str = None):
+    print(f"🎶 Engraving '{score_data.get('metadata', {}).get('title', '')}'...")
+    out_dir = Path('outputs'); out_dir.mkdir(parents=True, exist_ok=True)
+    ly_path = out_dir / f"{output_basename}.ly"
+    title = score_data.get('metadata', {}).get('title', output_basename)
+    metadata = score_data.get('metadata', {})
+    
+    # Copy source study file to outputs for inspection (always, for visual correlation)
+    if source_file:
+        source_path = Path(source_file)
+        if source_path.exists():
+            dest_path = out_dir / source_path.name
+            import shutil
+            shutil.copy2(source_path, dest_path)
+            print(f"📋 Copied {source_path.name} to outputs/ (shows both LILY and TINY formats)")
 
-    # Replace only occurrences that look like note names (avoid matching
-    # backslash commands like \time, \key). Use negative lookbehind to
-    # ensure we don't replace letters immediately preceded by a backslash.
-    def repl_acc(m):
-        note = m.group('note')
-        acc = m.group('acc') or ''
-        octave = m.group('oct') or ''
-        dur = m.group('dur') or ''
-        # normalize accidentals
-        if not acc:
-            acc_norm = ''
-        else:
-            a = acc.lower()
-            if a in ('mol', 'bemol', '\u266d'):
-                acc_norm = 'es'
-            elif a in ('#', '\u266f'):
-                acc_norm = 'is'
-            else:
-                acc_norm = a
-        return note + acc_norm + octave + dur
-
-    # Match note tokens like: a, a#, amus, bmol, a'4, <a c e>2 (we handle inner notes)
-    note_re = re.compile(r"(?<!\\)(?P<note>[a-gA-G])(?P<acc>mol|bemol|#|\u266f|\u266d|is|es)?(?P<oct>[,']*)(?P<dur>\d*\.?\d*)", re.IGNORECASE)
-
-    # First handle chords: replace inside < ... > bodies separately
-    def norm_chord(match):
-        body = match.group(1)
-        new_body = note_re.sub(repl_acc, body)
-        return '<' + new_body + '>'
-
-    s = re.sub(r"<([^>]+)>", norm_chord, s)
-
-    # Then replace standalone notes
-    s = note_re.sub(repl_acc, s)
-
-    return s
-
-def m21_pitch_to_lily(p: music21.pitch.Pitch) -> str:
-    # Robust conversion from music21.pitch.Pitch to a LilyPond pitch token.
-    # We avoid round-tripping through Abjad's NamedPitch to preserve
-    # accidentals (music21 uses '-' for flats) and ensure consistent
-    # 'is'/'es' spelling for sharps/flats in the emitted tokens.
-    try:
-        step = p.step.lower()  # 'C' -> 'c'
-        acc_text = ''
-        acc = getattr(p, 'accidental', None)
-        if acc is not None:
-            try:
-                alter = float(getattr(acc, 'alter', 0.0))
-            except Exception:
-                alter = 0.0
-            if alter > 0:
-                acc_text = 'is'
-            elif alter < 0:
-                acc_text = 'es'
-
-        # Compute octave marks: LilyPond's c (no mark) corresponds to octave 3
-        try:
-            octave = int(p.octave)
-        except Exception:
-            # fallback: try parsing nameWithOctave
-            s = getattr(p, 'nameWithOctave', '')
-            m = re.match(r"[A-Ga-g][#b-]?(\d+)", s)
-            octave = int(m.group(1)) if m else 4
-        n = octave - 3
-        if n > 0:
-            oct_marks = "'" * n
-        elif n < 0:
-            oct_marks = "," * (-n)
-        else:
-            oct_marks = ''
-
-        return f"{step}{acc_text}{oct_marks}"
-    except Exception:
-        # Fallback to Abjad conversion if anything goes wrong
-        return abjad.lilypond(abjad.NamedPitch(p.nameWithOctave))
-
-def engrave_with_abjad(parts: dict, output_file: str, prune_other: bool = False, force: bool = False, strip_accidentals: bool = False):
-    # If one part provides global directives (time signature, key, tempo),
-    # propagate them to any part that lacks them. This ensures consistent
-    # engraving (same barlines and tempo) even when some parts were created
-    # without those directives.
-    def _propagate_global_directives(source_part, target_part):
-        try:
-            from music21 import meter, tempo, key as m21key
-            ts_list = list(source_part.recurse().getElementsByClass(meter.TimeSignature))
-            if ts_list:
-                ts = ts_list[0]
-                existing_ts = list(target_part.recurse().getElementsByClass(meter.TimeSignature))
-                if not existing_ts:
-                    target_part.insert(0, ts)
-            key_list = list(source_part.recurse().getElementsByClass(m21key.Key))
-            if key_list:
-                k = key_list[0]
-                existing_k = list(target_part.recurse().getElementsByClass(m21key.Key))
-                if not existing_k:
-                    target_part.insert(0, k)
-            tempo_list = list(source_part.recurse().getElementsByClass(tempo.MetronomeMark))
-            if tempo_list:
-                tm = tempo_list[0]
-                existing_tm = list(target_part.recurse().getElementsByClass(tempo.MetronomeMark))
-                if not existing_tm:
-                    target_part.insert(0, tm)
-        except Exception:
-            pass
-
-    # Choose a source for global directives: prefer the first part that contains
-    # a TimeSignature, otherwise fall back to the first part in the dict.
-    source_for_directives = None
-    try:
-        from music21 import meter
-        for p in parts.values():
-            if list(p.recurse().getElementsByClass(meter.TimeSignature)):
-                source_for_directives = p
-                break
-        if source_for_directives is None:
-            # fallback to first part
-            if len(parts) > 0:
-                source_for_directives = next(iter(parts.values()))
-    except Exception:
-        source_for_directives = next(iter(parts.values())) if parts else None
-
-    if source_for_directives is not None:
-        for name, part in parts.items():
-            if part is None:
-                continue
-            if part is not source_for_directives:
-                # Warning: inform the user when propagation is applied so it's
-                # obvious which parts are inheriting time/key/tempo.
-                try:
-                    from music21 import meter
-                    if not list(part.recurse().getElementsByClass(meter.TimeSignature)):
-                        print(f"[warning] propagating TimeSignature/Key/Tempo from '{list(parts.keys())[0]}' to part '{name}'")
-                except Exception:
-                    pass
-                _propagate_global_directives(source_for_directives, part)
-
-    # Prepare a minimal comment header early so fallback emission can use it
-    # even if the detailed comment block is constructed later. This prevents
-    # UnboundLocalError when a manual multi-staff fallback path is taken
-    # before the full comment block is assembled.
-    comment_lines = [
-        "% ======= Generated comparison (Lily tokens vs tinyNotation) =======",
-        "% (This block is informational — LilyPond ignores lines starting with %)",
-        "%",
-    ]
-
-    # Convert each provided music21 Part into an Abjad Voice (if it contains tokens)
-    voices = {}
-    voice_token_texts = {}
-    for name, part in parts.items():
-        if part is None:
-            continue
-        tokens = []
-        # Heuristic: warn if many tokens lack explicit durations (these are
-        # commonly the source of surprising relative-octave or measure issues).
-        try:
-            # inspect the original part's leaves for duration metadata
-            nodur_count = 0
-            total = 0
-            for el in part.flatten().notesAndRests:
-                total += 1
-                if getattr(el, 'quarterLength', None) is None:
-                    nodur_count += 1
-            if total and nodur_count/total > 0.0:
-                # if any element has missing duration, warn (0.0 threshold to show any)
-                print(f"[info] part '{name}' has {nodur_count}/{total} elements with missing duration metadata")
-        except Exception:
-            pass
-        for el in part.flatten().notesAndRests:
-            # Try to create an exact LilyPond duration via Abjad; if Abjad
-            # cannot assign the duration (e.g. 1/3 whole), fall back to
-            # emitting a LilyPond tuplet that represents the intended
-            # duration exactly.
-            try:
-                frac = Fraction(el.quarterLength).limit_denominator(1024)
-            except Exception:
-                frac = Fraction(str(el.quarterLength)).limit_denominator(1024)
-
-            try:
-                # abjad expects a fraction of a whole note
-                dur = abjad.Duration(Fraction(frac, 4))
-                dur_str = dur.lilypond_duration_string
-                # Prefer original textual tokens only when they include explicit
-                # octave marks (apostrophes or commas). Otherwise fall back to
-                # pitch-derived strings which include the octave number so the
-                # emitted pitches remain correct.
-                if isinstance(el, music21.chord.Chord):
-                    # Use the original chord token only when it explicitly
-                    # encodes both an accidental spelling and an octave mark
-                    # inside the chord body. Otherwise prefer pitch-derived
-                    # tokens constructed from the resolved music21 pitches
-                    # so accidentals and octave placement are authoritative.
-                    full = getattr(el, '_orig_token', None)
-                    orig_body = getattr(el, '_orig_chord_body', None) or ''
-                    acc_ok = bool(re.search(r"(is|es|#|b|\u266f|\u266d|mol|bemol|-)", orig_body, re.IGNORECASE))
-                    oct_ok = ("'" in orig_body or "," in orig_body)
-                    if full and orig_body and acc_ok and oct_ok:
-                        tokens.append(full)
-                    else:
-                        chord_pitches = " ".join(m21_pitch_to_lily(p) for p in el.pitches)
-                        tokens.append(f"<{chord_pitches}>{dur_str}")
-                elif isinstance(el, music21.note.Note):
-                    # Prefer pitch-derived text unless the original pitch
-                    # token explicitly encoded both an accidental spelling and
-                    # an octave mark. This avoids silent loss of accidentals
-                    # or octave shifts caused by preferring user text that is
-                    # incomplete.
-                    full = getattr(el, '_orig_token', None)
-                    orig_pitch = getattr(el, '_orig_pitch_token', '') or ''
-                    acc_ok = bool(re.search(r"(is|es|#|b|\u266f|\u266d|mol|bemol|-)", orig_pitch, re.IGNORECASE))
-                    oct_ok = ("'" in orig_pitch or "," in orig_pitch)
-                    if full and orig_pitch and acc_ok and oct_ok:
-                        tokens.append(full)
-                    else:
-                        # If the original pitch substring encoded both
-                        # accidental+octave then we may prefer it for pitch
-                        # text; otherwise always use resolved pitch->lily.
-                        if acc_ok and oct_ok:
-                            pitch_text = orig_pitch
-                        else:
-                            pitch_text = m21_pitch_to_lily(el.pitch)
-                        # Prepend an inline warning marker if the underlying
-                        # event dict indicated a flagged large relative leap.
-                        try:
-                            evt = None
-                            # attempt to retrieve a backing event if the music21
-                            # Note carried one (convention: _orig_event attached)
-                            evt = getattr(el, '_orig_event', None)
-                        except Exception:
-                            evt = None
-                        if evt and evt.get('warning'):
-                            tokens.append(f"% * {pitch_text}{dur_str}")
-                        else:
-                            tokens.append(f"{pitch_text}{dur_str}")
-                elif isinstance(el, music21.note.Rest):
-                    tokens.append(f"r{dur_str}")
-            except Exception:
-                # Couldn't assign a simple duration; try to encode as a tuplet
-                tuplet_emitted = False
-                for base in [1, 2, 4, 8, 16, 32]:
-                    # ratio r = (desired ql) / (4/base)
-                    r = Fraction(frac * base, 4).limit_denominator(32)
-                    # Limit numerator/denominator to reasonable values
-                    if r.numerator <= 32 and r.denominator <= 32:
-                        inner_dur = str(base)
-                        if isinstance(el, music21.chord.Chord):
-                            full = getattr(el, '_orig_token', None)
-                            orig_body = getattr(el, '_orig_chord_body', None) or ''
-                            acc_ok = bool(re.search(r"(is|es|#|b|\u266f|\u266d|mol|bemol|-)", orig_body, re.IGNORECASE))
-                            oct_ok = ("'" in orig_body or "," in orig_body)
-                            if full and orig_body and acc_ok and oct_ok:
-                                inner = full
-                            else:
-                                chord_pitches = " ".join(m21_pitch_to_lily(p) for p in el.pitches)
-                                inner = f"<{chord_pitches}>{inner_dur}"
-                        elif isinstance(el, music21.note.Note):
-                            full = getattr(el, '_orig_token', None)
-                            orig_pitch = getattr(el, '_orig_pitch_token', '') or ''
-                            acc_ok = bool(re.search(r"(is|es|#|b|\u266f|\u266d|mol|bemol|-)", orig_pitch, re.IGNORECASE))
-                            oct_ok = ("'" in orig_pitch or "," in orig_pitch)
-                            if full and orig_pitch and acc_ok and oct_ok:
-                                inner = full
-                            else:
-                                if acc_ok and oct_ok:
-                                    pitch_text = orig_pitch
-                                else:
-                                    pitch_text = m21_pitch_to_lily(el.pitch)
-                                inner = f"{pitch_text}{inner_dur}"
-                        else:
-                            inner = f"r{inner_dur}"
-                        tokens.append(f"\\tuplet {r.numerator}/{r.denominator} {{ {inner} }}")
-                        tuplet_emitted = True
-                        break
-                if not tuplet_emitted:
-                    # Fallback to approximate lily duration string (existing behavior)
-                    dur_str = ql_to_lily_duration_string(el.quarterLength)
-                    if isinstance(el, music21.chord.Chord):
-                        full = getattr(el, '_orig_token', None)
-                        if full:
-                            tokens.append(full)
-                        else:
-                            orig = getattr(el, '_orig_chord_body', None)
-                            if orig and ("'" in orig or "," in orig):
-                                chord_pitches = orig
-                            else:
-                                chord_pitches = " ".join(m21_pitch_to_lily(p) for p in el.pitches)
-                            tokens.append(f"<{chord_pitches}>{dur_str}")
-                    elif isinstance(el, music21.note.Note):
-                        full = getattr(el, '_orig_token', None)
-                        if full:
-                            tokens.append(full)
-                        else:
-                            orig = getattr(el, '_orig_pitch_token', None)
-                            if orig and ("'" in orig or "," in orig):
-                                pitch_text = orig
-                            else:
-                                pitch_text = m21_pitch_to_lily(el.pitch)
-                            tokens.append(f"{pitch_text}{dur_str}")
-                    elif isinstance(el, music21.note.Rest):
-                        tokens.append(f"r{dur_str}")
-
-        # If the original part stored the user's Lily snippet and it used
-        # \relative, prefer emitting that snippet verbatim so LilyPond's
-        # relative octave context is preserved. Otherwise use the generated
-        # token stream.
-        # Always prefer the generated, pitch-derived token stream for
-        # Abjad-based engraving so that the emitted pitches/accidentals
-        # and octaves reflect the resolved music21 pitches. The parser's
-        # original snippet is still included in the comment block and
-        # used only for manual fallback emission paths.
-        token_text = " ".join(tokens).strip()
-        if token_text:
-            # Keep user-visible token_text in the comment index
-            voice_token_texts[name] = token_text
-            # Build Abjad components programmatically from the music21 Part
-            # so Abjad does not re-parse a token string (which can cause
-            # accidental respelling or octave changes). This preserves the
-            # pitch text produced by m21_pitch_to_lily exactly.
-            abjad_components = []
-            try:
-                for el in part.flatten().notesAndRests:
-                    try:
-                        frac = Fraction(el.quarterLength).limit_denominator(1024)
-                    except Exception:
-                        frac = Fraction(str(el.quarterLength)).limit_denominator(1024)
-                    # Compute lily duration string for literal emission
-                    try:
-                        dur = abjad.Duration(Fraction(frac, 4))
-                        dur_str = dur.lilypond_duration_string
-                    except Exception:
-                        dur_str = ql_to_lily_duration_string(el.quarterLength)
-
-                    if getattr(el, 'isRest', False):
-                        abjad_components.append(abjad.LilyPondLiteral(f"r{dur_str}"))
-                        continue
-
-                    if isinstance(el, music21.chord.Chord):
-                        # Build a literal chord token from resolved pitches
-                        chord_pitches = " ".join(m21_pitch_to_lily(p) for p in el.pitches)
-                        lit = f"<{chord_pitches}>{dur_str}"
-                        abjad_components.append(abjad.LilyPondLiteral(lit))
-                        continue
-
-                    if isinstance(el, music21.note.Note):
-                        orig_pitch = getattr(el, '_orig_pitch_token', '') or ''
-                        acc_ok = bool(re.search(r"(is|es|#|b|\\u266f|\\u266d|mol|bemol|-)", orig_pitch, re.IGNORECASE))
-                        oct_ok = ("'" in orig_pitch or "," in orig_pitch)
-                        if acc_ok and oct_ok:
-                            pitch_text = orig_pitch
-                        else:
-                            pitch_text = m21_pitch_to_lily(el.pitch)
-
-                        # Prepend an inline warning comment if the event
-                        # indicated a large relative-leap warning.
-                        try:
-                            evt = getattr(el, '_orig_event', None)
-                        except Exception:
-                            evt = None
-                        if evt and evt.get('warning'):
-                            abjad_components.append(abjad.LilyPondLiteral('% *', 'before'))
-
-                        lit = f"{pitch_text}{dur_str}"
-                        abjad_components.append(abjad.LilyPondLiteral(lit))
-                        continue
-
-                voices[name] = abjad.Voice(abjad_components, name=name)
-            except Exception:
-                # If programmatic construction fails for any reason, fall
-                # back to the original token-string path so we can still
-                # produce a manual fallback if Abjad can't parse it.
-                try:
-                    token_for_abjad = _normalize_lily_for_abjad(token_text)
-                    voices[name] = abjad.Voice(token_for_abjad, name=name)
-                except Exception:
-                    manual_multi_fallback = True
-                    break
-
-    # Verification pass: build a minimal Abjad file from the constructed
-    # voices and check that the emitted token substrings appear in the
-    # rendered lily text. If tokens are missing (Abjad respelled them),
-    # set manual_multi_fallback so the manual .ly path runs below.
-    try:
-        if 'voices' in locals() and voices:
-            # create a minimal score for verification
-            tmp_staffs = []
-            for name, v in voices.items():
-                try:
-                    tmp_staffs.append(abjad.Staff([v], name=name))
-                except Exception:
-                    tmp_staffs = []
-                    break
-            if tmp_staffs:
-                if len(tmp_staffs) == 1:
-                    tmp_score = abjad.Score([tmp_staffs[0]])
-                else:
-                    tmp_score = abjad.Score([abjad.StaffGroup(tmp_staffs, lilypond_type='PianoStaff')])
-                tmp_header = abjad.Block(name='header', items=[f'title = "verify"'])
-                tmp_lyfile = abjad.LilyPondFile(items=[tmp_header, tmp_score])
-                tmp_text = abjad.lilypond(tmp_lyfile).lower()
-                # Check that each voice_token_texts sample appears
-                for pname, toks in voice_token_texts.items():
-                    if not toks:
-                        continue
-                    samples = toks.split()[:6]
-                    for s in samples:
-                        if s.strip() == '':
-                            continue
-                        if s.lower() not in tmp_text:
-                            print(f"[info] token '{s}' from part '{pname}' not found in Abjad-rendered lily; will use manual fallback")
-                            manual_multi_fallback = True
-                            raise StopIteration()
-    except StopIteration:
-        pass
-    except Exception:
-        # if verification crashes, prefer manual fallback to be safe
-        manual_multi_fallback = True
-
-    # If manual_multi_fallback was set earlier due to construction errors,
-    # or if verification determines the Abjad-generated lily differs from
-    # the expected tokens, the following block will run. Otherwise the
-    # Abjad hybrid content will be written above.
-    if 'manual_multi_fallback' in locals() and manual_multi_fallback:
-        # Build a manual multi-staff Lily file using the available
-        # original snippets or token_texts so LilyPond parses them
-        # directly. This preserves localized notation and avoids
-        # Abjad parsing errors.
-        # Ensure we have an output path available here (the usual out_path
-        # is computed later). Compute a local out_dir/ly_path so we can
-        # immediately write the manual .ly and call LilyPond.
-        out_path = Path(output_file)
-        if out_path.parent == Path('.') or str(out_path.parent) == '':
-            out_dir = Path('outputs')
-        else:
-            out_dir = out_path.parent
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ly_filename = out_path.with_suffix('.ly').name
-        ly_path = out_dir / ly_filename
-
-        # Detect localized accidental spellings in original snippets or
-        # synthesized token streams. If present, emit a German-style
-        # language directive so LilyPond accepts tokens like 'bes'/'fis'.
-        lang = 'english'
-        try:
-            combined_text = ' '.join(
-                (getattr(parts.get(pname), '_original_snippet', '') or '')
-                for pname in parts.keys() if parts.get(pname) is not None
-            )
-            combined_text += ' ' + ' '.join(voice_token_texts.get(k, '') for k in voice_token_texts.keys())
-            if re.search(r"\b(bes|fis|cis|gis|ais|des|ges|ees|bmol|bemol|#|\u266d|\u266f)\b", combined_text, re.IGNORECASE):
-                lang = 'deutsch'
-        except Exception:
-            lang = 'english'
-
-        manual_lines = []
-        manual_lines.extend(comment_lines)
-        # Build a safe Lily body from a music21 Part by emitting explicit
-        # pitches (nameWithOctave) so LilyPond receives unambiguous tokens.
-        def _lily_from_m21_pitch(p: music21.pitch.Pitch, octave_nudge: int = 0) -> str:
-            # Prefer the canonical conversion provided by m21_pitch_to_lily,
-            # which uses Abjad to produce LilyPond-compliant pitch tokens.
-            try:
-                # m21_pitch_to_lily returns a Lily-compatible pitch token
-                # like "e'" or "bes'" and will apply locale-appropriate
-                # accidentals. If an octave_nudge is requested, adjust via
-                # the music21 pitch object and re-run the conversion.
-                if octave_nudge:
-                    p2 = music21.pitch.Pitch(p.nameWithOctave)
-                    p2.octave = int(p2.octave) + octave_nudge
-                    return m21_pitch_to_lily(p2)
-                return m21_pitch_to_lily(p)
-            except Exception:
-                # Fallback to a conservative textual form (lowercase step
-                # plus octave number) which LilyPond accepts via
-                # normalization pass later if needed.
-                try:
-                    return p.nameWithOctave.lower()
-                except Exception:
-                    return str(p).lower()
-
-        def _safe_body_from_part(part):
-            toks = []
-            try:
-                for el in part.flatten().notesAndRests:
-                    ql = getattr(el, 'quarterLength', 1.0) or 1.0
-                    dur_str = ql_to_lily_duration_string(ql)
-                    if getattr(el, 'isRest', False):
-                        toks.append(f"r{dur_str}")
-                        continue
-                    if isinstance(el, music21.chord.Chord):
-                        # Prefer emitting chord bodies without internal octave
-                        # markers. If all pitches in the chord share the same
-                        # octave, place a single octave marker after the
-                        # chord (e.g. "<c ees g>'2"). This avoids mixing
-                        # localized accidentals with apostrophes inside the
-                        # chord which has been observed to trigger parsing
-                        # issues in some LilyPond contexts.
-                        pitch_texts = [ _lily_from_m21_pitch(p) for p in el.pitches ]
-                        # strip octave marks from each pitch
-                        pitch_no_oct = [ re.sub(r"[,']+$", '', s) for s in pitch_texts ]
-                        # determine if all pitches share the same octave
-                        oct_marks = ''
-                        try:
-                            octs = [ re.search(r"([,']+)$", s).group(1) if re.search(r"([,']+)$", s) else '' for s in pitch_texts ]
-                            if len(set(octs)) == 1:
-                                oct_marks = octs[0]
-                        except Exception:
-                            oct_marks = ''
-                        if oct_marks:
-                            toks.append(f"<{' '.join(pitch_no_oct)}>{oct_marks}{dur_str}")
-                        else:
-                            # Mixed-octave chord; emit explicit octave markers
-                            # per pitch to preserve exact voicing.
-                            toks.append(f"<{' '.join(pitch_texts)}>{dur_str}")
-                        continue
-                    if isinstance(el, music21.note.Note):
-                        pitch_text = _lily_from_m21_pitch(el.pitch)
-                        try:
-                            evt = getattr(el, '_orig_event', None)
-                        except Exception:
-                            evt = None
-                        if evt and evt.get('warning'):
-                            toks.append(f"% * {pitch_text}{dur_str}")
-                        else:
-                            toks.append(f"{pitch_text}{dur_str}")
-                        continue
-            except Exception:
-                return ""
-            return " ".join(toks)
-
-        def _safe_relative_body_from_part(part):
-            """Emit a \relative-wrapped token stream using the part's first
-            note as base and emitting subsequent notes without octave marks.
-
-            This keeps LilyPond's own relative-octave resolution in sync with
-            the parsed music21 Part and avoids mismatches caused by mixing
-            absolute octave apostrophes with a missing/incorrect context.
-            """
-            try:
-                notes = [el for el in part.flatten().notesAndRests if not getattr(el,'isRest',False)]
-                if not notes:
-                    return ''
-                base_note = notes[0]
-                # Build base token with explicit octave marks using our helper
-                base_token = _lily_from_m21_pitch(base_note.pitch)
-
-                rel_toks = []
-                for el in part.flatten().notesAndRests:
-                    ql = getattr(el, 'quarterLength', 1.0) or 1.0
-                    dur_str = ql_to_lily_duration_string(ql)
-                    if getattr(el,'isRest',False):
-                        rel_toks.append(f"r{dur_str}")
-                        continue
-                    if isinstance(el, music21.chord.Chord):
-                        # emit chord body with step+acc only (no octave marks)
-                        chord_pitches = []
-                        for p in el.pitches:
-                            # get step+acc textual form from m21_pitch_to_lily and strip octaves
-                            s = m21_pitch_to_lily(p)
-                            s = re.sub(r"[,']", "", s)
-                            chord_pitches.append(s)
-                        rel_toks.append(f"<{' '.join(chord_pitches)}>{dur_str}")
-                        continue
-                    # single note: emit step+acc (no octave) + duration
-                    s = m21_pitch_to_lily(el.pitch)
-                    s = re.sub(r"[,']", "", s)
-                    rel_toks.append(f"{s}{dur_str}")
-
-                body = ' '.join(rel_toks)
-                return f"\\relative {base_token} {{ {body} }}"
-            except Exception:
-                return ''
+    staves = []
+    # Note: reverse=True ensures correct staff order (Melody at top, Harmony at bottom)
+    # LilyPond renders staves in reverse vertical order, so we reverse alphabetical sort
+    for part_name, events_or_voices in sorted(score_data.get('parts', {}).items(), reverse=True):
+        # Check if this is a multi-voice part (dict) or single-voice (list)
+        is_multi_voice = isinstance(events_or_voices, dict)
         
-        def _strip_accidentals_from_lily(s: str) -> str:
-            """Remove accidental markers from Lily tokens in a conservative way.
-
-            This removes accidentals like 'is','es','s','#','\u266f','\u266d',
-            'mol','bemol','-' when they appear immediately after the step
-            letter (a-g). It operates both on standalone notes and notes
-            inside chord bodies. The function is intentionally conservative
-            so it doesn't change the original commented snippet — only the
-            emitted safe token stream.
-            """
-            if not s:
-                return s
-
-            note_re = re.compile(r"(?P<step>[a-gA-G])(?P<acc>is|es|s|#|\u266f|\u266d|b|mol|bemol|-)?(?P<oct>[,']*)", re.IGNORECASE)
-
-            def _repl(m):
-                step = m.group('step').lower()
-                octm = m.group('oct') or ''
-                return f"{step}{octm}"
-
-            # Handle chords by transforming inside <...> bodies first
-            def _norm_chord(match):
-                body = match.group(1)
-                new_body = note_re.sub(_repl, body)
-                return f"<{new_body}>"
-
-            s = re.sub(r"<([^>]+)>", _norm_chord, s)
-            s = note_re.sub(_repl, s)
-            return s
-        # Simplified: always include a \version line, prefer the detected
-        # language, prefer original snippets verbatim, and wrap multiple
-        # Staffs in a simultaneous block.
-        manual_lines.append('\version "2.24.1"')
-        manual_lines.append(f'\\language "{lang}"')
-        manual_lines.append('\header {')
-        manual_lines.append(f'    title = "{out_path.stem} (generated)"')
-        manual_lines.append('    composer = "Python + music21 + Abjad"')
-        manual_lines.append('}')
-        manual_lines.append('')
-        manual_lines.append('\\score {')
-        if len(parts) > 1:
-            manual_lines.append('  <<')
-
-        for pname in parts.keys():
-            ppart = parts.get(pname)
-            p_snip = getattr(ppart, '_original_snippet', None)
-
-            # Build directive prefix (time/key/tempo) from part if available
-            dir_prefix = ''
-            try:
-                if ppart is not None:
-                    from music21 import meter, key as m21key, tempo as m21tempo
-                    ts_list = list(ppart.recurse().getElementsByClass(meter.TimeSignature))
-                    if ts_list:
-                        ts = ts_list[0]
-                        dir_prefix += f"\\time {ts.numerator}/{ts.denominator} "
-                    k_list = list(ppart.recurse().getElementsByClass(m21key.Key))
-                    if k_list:
-                        k = k_list[0]
-                        k_mode = getattr(k, 'mode', '') or ''
-                        mode = 'minor' if 'minor' in k_mode.lower() else 'major'
-                        dir_prefix += f"\\key {k.tonic.name.lower()} \\\{mode} "
-                    tm_list = list(ppart.recurse().getElementsByClass(m21tempo.MetronomeMark))
-                    if tm_list and getattr(tm_list[0], 'number', None):
-                        tm = tm_list[0]
-                        dir_prefix += f"\\tempo 4={int(getattr(tm, 'number', 120))} "
-            except Exception:
-                dir_prefix = ''
-
-            # If the music21 Part lacks explicit directive objects (common when
-            # directives were present only in the original Lily snippet), try
-            # extracting directives directly from the original snippet text so
-            # the manual-emitted Staff receives the intended \time/\key/\tempo.
-            if not dir_prefix:
-                try:
-                    if isinstance(p_snip, str) and p_snip:
-                        m_time = re.search(r"\\time\s+\d+/\d+", p_snip)
-                        if m_time:
-                            dir_prefix += m_time.group(0) + ' '
-                        m_tempo = re.search(r"\\tempo\s+[^\s]+", p_snip)
-                        if m_tempo:
-                            dir_prefix += m_tempo.group(0) + ' '
-                        m_key = re.search(r"\\key\s+[a-gA-G][^\s]*\s+(?:major|minor)?", p_snip)
-                        if m_key:
-                            dir_prefix += m_key.group(0) + ' '
-                except Exception:
-                    pass
-
-            # Prefer user-supplied snippet when available; emit it verbatim in
-            # the manual fallback. Previously we normalized localized forms
-            # (e.g. 'bmol' -> 'bes'), but on some LilyPond setups that mapping
-            # caused parsing errors (not-a-note-name). Emitting the original
-            # snippet preserves the user's text and avoids introducing
-            # normalization-induced incompatibilities in the manual path.
-            if isinstance(p_snip, str) and p_snip.strip():
-                # If the user's snippet contains localized accidentals or
-                # ASCII sharps (which we've seen cause parsing problems in
-                # some LilyPond installations), prefer to synthesize a
-                # safe body using explicit pitch+octave tokens so the
-                # manual-emitted .ly will parse reliably. Otherwise emit
-                # the user's snippet verbatim for fidelity.
-                try:
-                    if re.search(r"\b(bmol|bemol|#|\u266f|\u266d|bes|fis|is|es)\b", p_snip, re.IGNORECASE):
-                        body = _safe_body_from_part(ppart)
-                        if not body:
-                            # If safe-body generation failed, prefer a normalized
-                            # variant of the user's snippet rather than emitting
-                            # the raw localized tokens which some LilyPond setups
-                            # reject (e.g. 'bmol'). Fall back to the original
-                            # snippet only if normalization fails.
-                            try:
-                                body = _normalize_lily_for_abjad(p_snip)
-                            except Exception:
-                                body = p_snip
-                    else:
-                        body = p_snip
-                except Exception:
-                    body = p_snip
-            else:
-                body = _safe_body_from_part(ppart) or voice_token_texts.get(pname, '')
-
-            manual_lines.append('  \\new Staff')
-            manual_lines.append('  {')
-            try:
-                if p_snip:
-                    manual_lines.append(f'    % original snippet: {p_snip}')
-            except Exception:
-                pass
-
-            # Attach clef if this part looks like harmony/bass
-            try:
-                clef_tok = ''
-                if 'harmony' in pname.lower() or 'bass' in pname.lower():
-                    clef_tok = '\\clef bass '
-                else:
-                    clef_tok = '\\clef treble '
-            except Exception:
-                clef_tok = ''
-
-            # Prefer emitting a synthesized absolute safe body constructed
-            # from the music21 Part. This avoids emitting verbatim localized
-            # accidental spellings which have been observed to cause
-            # 'not a note name' errors in some LilyPond setups. If safe
-            # body synthesis fails, fall back to token_texts or the original
-            # snippet as a last resort.
-            try:
-                safe_body = _safe_body_from_part(ppart)
-            except Exception:
-                safe_body = ''
-            if not safe_body:
-                safe_body = voice_token_texts.get(pname, '') or (p_snip or '')
-            try:
-                if strip_accidentals:
-                    safe_body = _strip_accidentals_from_lily(safe_body)
-            except Exception:
-                pass
-            manual_lines.append(f'    {clef_tok}{dir_prefix}{safe_body}')
-            manual_lines.append('  }')
-
-        if len(parts) > 1:
-            manual_lines.append('  >>')
-
-        manual_lines.append('  \\layout { }')
-        manual_lines.append('  \\midi { }')
-        manual_lines.append('}')
-        # Sanitize lines to remove control characters that may have been
-        # introduced accidentally (e.g. vertical tab 0x0B). LilyPond is
-        # sensitive to such bytes and will fail parsing the \version line.
-        import re as _re
-        cleaned = []
-        for _l in manual_lines:
-            if not isinstance(_l, str):
-                _l = str(_l)
-            # Detect control characters and remove them rather than
-            # replacing them with escape sequences. Replacing with
-            # '\x..' produced literal backslash-escapes that LilyPond
-            # then interpreted as unknown escaped strings (e.g. '\x0bersion').
-            if _re.search(r"[\x00-\x1f]", _l):
-                orig = _l
-                # Remove any control characters (including vertical tab 0x0B)
-                _l = _re.sub(r"[\x00-\x1f]+", '', _l)
-                # If stripping control characters removed a leading backslash
-                # from a Lily directive (e.g. '\version' -> 'ersion'),
-                # restore it for common directives so LilyPond doesn't see
-                # an unexpected bare token. We only do this for non-comment
-                # lines to avoid modifying intended comment text.
-                if not _l.lstrip().startswith('%'):
-                    stripped = _l.lstrip()
-                    # common directives that should be prefixed with a backslash
-                    directives = ('version', 'language', 'header', 'score', 'new', 'layout', 'midi', 'clef', 'time', 'key', 'tempo')
-                    leading_ws = _l[:len(_l) - len(_l.lstrip())]
-                    for d in directives:
-                        # exact match (directive still intact but lost backslash)
-                        if stripped.startswith(d + ' ') or stripped.startswith(d + '{') or stripped.startswith(d + '"'):
-                            _l = leading_ws + '\\' + stripped
-                            break
-                        # common case: the first character of the directive was replaced
-                        # by a control character and removed; check for directive suffix
-                        # match (e.g. 'ersion' -> 'version') and restore full name.
-                        if stripped.startswith(d[1:]):
-                            rest = stripped[len(d[1:]):]
-                            _l = leading_ws + '\\' + d + rest
-                            break
-                print(f"[warning] removed control characters from Lily line: {repr(orig)[:200]} -> {repr(_l)[:200]}")
-            # Remove accidental ellipsis sequences that can appear when
-            # very long token streams are truncated elsewhere. These
-            # '...' fragments inside musical lines break LilyPond parsing
-            # (they are not valid music tokens), so remove them for
-            # non-comment lines.
-            try:
-                if not _l.lstrip().startswith('%'):
-                    _l = _l.replace('...', '')
-            except Exception:
-                pass
-            cleaned.append(_l)
-        ly_text = "\n".join(cleaned) + "\n"
-    # sanitize and write atomically
-    _safe_write_text(ly_path, _final_sanitize_ly_text(ly_text))
-    print(f"Wrote manual multi-staff Lily file: {ly_path}")
-    # Try running LilyPond and capture stderr. If LilyPond fails due to
-    # localized accidental tokens (e.g. 'bmol'), retry with a normalized
-    # version where such accidentals are converted to Lily-friendly forms.
-    proc = subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir), capture_output=True, text=True)
-    stderr = (proc.stderr or '').lower()
-    if proc.returncode != 0 and ("not a note name" in stderr or "ignoring non-music expression" in stderr or "syntax error" in stderr):
-        print("[info] LilyPond failed on verbatim snippet; retrying with normalized accidentals...")
-        try:
-            alt = _normalize_lily_for_abjad(ly_text)
-        except Exception:
-            alt = ly_text
-        _safe_write_text(ly_path, _final_sanitize_ly_text(alt))
-        proc2 = subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir), capture_output=True, text=True)
-        if proc2.returncode != 0:
-            print('[error] LilyPond still failed after normalization:')
-            print(proc2.stderr[:1000])
-        else:
-            print('[info] LilyPond succeeded after normalization retry')
-    return
-
-    if not voices:
-        raise RuntimeError("No musical parts provided to engrave_with_abjad")
-
-    # Create Abjad Staffs for each voice and attach basic directives
-    staffs = []
-    for idx, (name, voice) in enumerate(voices.items()):
-        staff = abjad.Staff([voice], name=name)
-        staffs.append(staff)
-        try:
-            if abjad.select.leaf(staff, 0):
-                leaf0 = abjad.select.leaf(staff, 0)
-                # first staff: add treble clef, key/time/metronome
-                if idx == 0:
-                    abjad.attach(abjad.Clef("treble"), leaf0)
-                    # prefer a TimeSignature found in the original music21 Part
-                    ts_attached = False
-                    try:
-                        orig_part = parts.get(name)
-                        if orig_part is not None:
-                            ts_list = list(orig_part.recurse().getElementsByClass(music21.meter.TimeSignature))
-                            if ts_list:
-                                ts = ts_list[0]
-                                abjad.attach(abjad.TimeSignature((ts.numerator, ts.denominator)), leaf0)
-                                ts_attached = True
-                    except Exception:
-                        ts_attached = False
-                    if not ts_attached:
-                        abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
-                    abjad.attach(abjad.KeySignature(abjad.NamedPitchClass("c"), abjad.Mode("major")), leaf0)
-                    abjad.attach(abjad.MetronomeMark(abjad.Duration(1, 4), 100), leaf0)
-                # if name suggests harmony, use bass clef
-                elif "harmony" in name.lower() or "bass" in name.lower():
-                    abjad.attach(abjad.Clef("bass"), leaf0)
-                    # try to attach the same time signature if present
-                    try:
-                        orig_part = parts.get(name)
-                        if orig_part is not None:
-                            ts_list = list(orig_part.recurse().getElementsByClass(music21.meter.TimeSignature))
-                            if ts_list:
-                                ts = ts_list[0]
-                                abjad.attach(abjad.TimeSignature((ts.numerator, ts.denominator)), leaf0)
-                            else:
-                                abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
-                    except Exception:
-                        abjad.attach(abjad.TimeSignature((4, 4)), leaf0)
-        except Exception:
-            # keep going even if attachments fail
-            pass
-
-    # Build score: single staff => Score(staff), multiple => StaffGroup
-    if len(staffs) == 1:
-        score = abjad.Score(staffs)
-    else:
-        score = abjad.Score([abjad.StaffGroup(staffs, lilypond_type="PianoStaff")])
-
-    header = abjad.Block(name="header", items=[
-        f'title = "{output_file} (generated)"',
-        'composer = "Python + music21 + Abjad"',
-    ])
-    lyfile = abjad.LilyPondFile(items=[header, score])
-
-    # Render the LilyPond text and ensure it's wrapped in a \score block
-    # that contains a \layout and \midi block so LilyPond will produce MIDI.
-    ly_text = abjad.lilypond(lyfile)
-    # Find the score start (\new Score ...) and wrap it in a full \score { ... }
-    idx = ly_text.find("\\new Score")
-    if idx != -1:
-        wrapped = ly_text[:idx] + "\\score {\n" + ly_text[idx:]
-        wrapped += "\n\\layout { }\n\\midi { }\n}\n"
-    else:
-        # fallback: append layout/midi blocks
-        wrapped = ly_text + "\n\\layout { }\n\\midi { }\n"
-    # Verification: ensure the tokens we generated (voice_token_texts)
-    # appear verbatim in the Abjad-generated Lily text. If Abjad has
-    # respelled tokens or omitted them, prefer the manual fallback to
-    # guarantee fidelity of accidentals/octaves.
-    try:
-        missing = False
-        rendered = wrapped.lower()
-        for pname, toks in voice_token_texts.items():
-            # Check for a few key tokens (split, take first few to reduce
-            # false negatives). We expect substrings like "bes'4" or "c''2".
-            if not toks:
-                continue
-            samples = toks.split()[:6]
-            for s in samples:
-                if s.strip() == '':
-                    continue
-                if s.lower() not in rendered:
-                    missing = True
-                    break
-            if missing:
-                break
-        if missing:
-            print('[info] Abjad-generated lily text differs from emitted tokens; switching to manual verbatim .ly for fidelity')
-            manual_multi_fallback = True
-    except Exception:
-        # If verification fails for any reason, conservatively fall back
-        manual_multi_fallback = True
-
-    # If there is exactly one part and it stored the original Lily snippet
-    # using \relative, prefer emitting that original snippet verbatim inside
-    # a Staff so LilyPond's relative octave semantics are preserved.
-    try:
-        if len(parts) == 1:
-            name_only = next(iter(parts.keys()))
-            orig_part = parts.get(name_only)
-            orig_snip = getattr(orig_part, '_original_snippet', None)
-            if orig_snip and "\\relative" in orig_snip:
-                # Emit a minimal Lily file that wraps the original \relative
-                # snippet verbatim inside a single Staff. This guarantees
-                # LilyPond will interpret relative octaves exactly as the
-                # user wrote them and avoids mixing in Abjad-generated tokens.
-                manual = []
-                manual.append('\version "2.24.1"')
-                try:
-                    lang = 'deutsch' if only_snip and re.search(r"\b(bes|fis|cis|gis|ais|des|ges|ees|bmol|bemol|#|\\u266d|\\u266f)\b", only_snip, re.IGNORECASE) else 'english'
-                except Exception:
-                    lang = 'english'
-                manual.append(f'\\language "{lang}"')
-                manual.append('\header {')
-                manual.append(f'    title = "{out_path.stem} (generated)"')
-                manual.append('    composer = "Python + music21 + Abjad"')
-                manual.append('}')
-                # Place the original snippet directly inside a Staff so the
-                # \relative block is preserved verbatim.
-                manual.append('\\score {')
-                manual.append('  \\new Staff')
-                manual.append('  {')
-                manual.append(f'    {orig_snip}')
-                manual.append('  }')
-                manual.append('  \\layout { }')
-                manual.append('  \\midi { }')
-                manual.append('}')
-                wrapped = "\n".join(manual) + "\n"
-    except Exception:
-        pass
-
-    # Determine output directory. If output_file includes a path, use that
-    # parent, otherwise default to outputs/ so generated artifacts are grouped.
-    out_path = Path(output_file)
-    if out_path.parent == Path('.') or str(out_path.parent) == '':
-        out_dir = Path('outputs')
-    else:
-        out_dir = out_path.parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # If a PDF already exists and force is False, don't overwrite — let the
-    # template decide whether to regenerate. This moves overwrite control out
-    # of study files and into the template so callers don't need to duplicate
-    # the same existence checks.
-    try:
-        pdf_path = out_dir / f"{out_path.stem}.pdf"
-        if pdf_path.exists() and not force:
-            print(f"Output exists ({pdf_path}). Use --force to overwrite. Leaving file unchanged.")
-            return
-    except Exception:
-        pass
-
-    # Optionally prune other generated basenames in out_dir so only files
-    # matching this output basename remain (e.g. keep first_score.* only).
-    if prune_other:
-        try:
-            basename = out_path.stem
-            for p in out_dir.iterdir():
-                if not p.is_file():
-                    continue
-                if p.suffix.lower() in {'.ly', '.pdf', '.midi'} and p.stem != basename:
-                    try:
-                        p.unlink()
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    ly_filename = out_path.with_suffix('.ly').name
-    ly_path = out_dir / ly_filename
-    # Prepend a concise commented comparison block to the LilyPond file so
-    # users can inspect the emitted Lily tokens and the derived tinyNotation
-    # directly inside the .ly file. This mirrors outputs/<basename>.txt but
-    # keeps everything in a single concise artifact.
-    try:
-        comment_lines = [
-            "% ======= Generated comparison (Lily tokens vs tinyNotation) =======",
-            "% (This block is informational — LilyPond ignores lines starting with %)",
-            "%",
-        ]
-        for name, part in parts.items():
-            if part is None:
-                continue
-            comment_lines.append(f"% === Part: {name} ===")
-            # include original snippet if the part stores it
-            try:
-                orig = getattr(part, '_original_snippet', None)
-                if orig:
-                    comment_lines.append(f"% original snippet: {orig}")
-            except Exception:
-                pass
-            try:
-                tn = part_to_tinynotation(part)
-                comment_lines.append(f"% tinyNotation: {tn}")
-            except Exception:
-                comment_lines.append("% tinyNotation: (failed to derive)")
-            lp = voice_token_texts.get(name, "")
-            # Wrap long token strings to reasonable line lengths
-            maxw = 120
-            if lp:
-                for i in range(0, len(lp), maxw):
-                    comment_lines.append(f"% lilyTokens: {lp[i:i+maxw]}")
-            else:
-                comment_lines.append("% lilyTokens: (none)")
-            comment_lines.append("%")
-        # If the parser attached warnings to the metadata, include them
-        meta_warnings = getattr(score_data_stub() , 'warnings', None) if False else None
-        # We don't have score_data in this scope; instead inspect parts for
-        # attached metadata/warnings via a convention: parts may carry an
-        # attribute '_parse_warnings' (set by the parser). Collect and
-        # include them here.
-        pw = []
-        for p in parts.values():
-            try:
-                w = getattr(p, '_parse_warnings', None)
-                if w:
-                    pw.extend(w)
-            except Exception:
-                pass
-        if pw:
-            comment_lines.append('% Parser warnings:')
-            for w in pw:
-                # wrap long warning lines
-                for i in range(0, len(w), 120):
-                    comment_lines.append('% ' + w[i:i+120])
-            comment_lines.append('%')
-        comment_block = "\n".join(comment_lines) + "\n\n"
-        # If a single part provided an original \relative snippet, write a
-        # minimal LilyPond file that uses that snippet verbatim. This avoids
-        # any Abjad-driven reformatting that can alter relative octave
-        # interpretation.
-        try:
-            if len(parts) == 1:
-                only_name = next(iter(parts.keys()))
-                only_part = parts.get(only_name)
-                only_snip = getattr(only_part, '_original_snippet', None)
-                if only_snip and '\\relative' in only_snip:
-                    manual_lines = [
-                        '% ======= Generated comparison (Lily tokens vs tinyNotation) =======',
-                        '% (This block is informational — LilyPond ignores lines starting with %)',
-                        '%',
-                    ]
-                    manual_lines.extend(comment_lines[3:])
-                    manual_lines.append('')
-                    manual_lines.append('\\version "2.24.1"')
-                    manual_lines.append('\\language "english"')
-                    manual_lines.append('\\header {')
-                    manual_lines.append(f'    title = "{out_path.stem} (generated)"')
-                    manual_lines.append('    composer = "Python + music21 + Abjad"')
-                    manual_lines.append('}')
-                    manual_lines.append('')
-                    # If the \relative base lacks explicit octave marks, add a
-                    # single apostrophe so the reference pitch is unambiguous
-                    # (this nudges the reference into the expected octave).
-                    adj = only_snip
-                    try:
-                        mbase = re.match(r"(\\relative\s+)([a-g][eis]*)(\s*\{)", only_snip)
-                        if mbase:
-                            prefix, base_tok, brace = mbase.groups()
-                            if "'" not in base_tok and "," not in base_tok:
-                                base_tok = base_tok + "'"
-                                adj = prefix + base_tok + brace + only_snip[mbase.end():]
-                    except Exception:
-                        adj = only_snip
-                    # Place the (possibly adjusted) snippet in the file
-                    # Build a full LilyPond score that wraps the (possibly
-                    # adjusted) original snippet in a Staff and includes
-                    # layout and midi blocks. Writing a complete \score
-                    # ensures LilyPond interprets the \relative base the
-                    # same way it would in a normal score file.
-                    full = []
-                    full.extend([
-                        '% ======= Generated comparison (Lily tokens vs tinyNotation) =======',
-                        '% (This block is informational — LilyPond ignores lines starting with %)',
-                        '%',
-                    ])
-                    full.extend(comment_lines[3:])
-                    full.append('')
-                    full.append('\version "2.24.1"')
-                    try:
-                        lang = 'deutsch' if adj and re.search(r"\b(bes|fis|cis|gis|ais|des|ges|ees|bmol|bemol|#|\\u266d|\\u266f)\b", adj, re.IGNORECASE) else 'english'
-                    except Exception:
-                        lang = 'english'
-                    full.append(f'\\language "{lang}"')
-                    full.append('\header {')
-                    full.append(f'    title = "{out_path.stem} (generated)"')
-                    full.append('    composer = "Python + music21 + Abjad"')
-                    full.append('}')
-                    full.append('')
-                    # Place the adjusted original snippet inside a Staff within
-                    # an explicit \score so LilyPond's relative rules apply
-                    full.append('\\score {')
-                    full.append('  \\new Staff {')
-                    full.append(f'    {adj}')
-                    full.append('  }')
-                    full.append('  \\layout { }')
-                    full.append('  \\midi { }')
-                    full.append('}')
-                    full_text = "\n".join(full) + "\n"
-                    # indicate that we emitted a manual full-score (use MIDI to
-                    # derive JSON events later so the event list matches the
-                    # engraved output)
-                    manual_emitted = True
-                    _safe_write_text(ly_path, _final_sanitize_ly_text(full_text))
-                    # Re-parse the adjusted snippet so JSON/events reflect
-                    # the same pitch interpretation LilyPond will use.
-                    try:
-                        parsed_adj = parse_lilypond_snippet(adj)
-                        parsed_adj._original_snippet = adj
-                        parts[only_name] = parsed_adj
-                    except Exception:
-                        pass
-                    # We've written the proper manual score; skip the hybrid write
-                    raise StopIteration()
-        except StopIteration:
-            pass
-        except Exception:
-            # fallback to writing the hybrid content if anything goes wrong
-            _safe_write_text(ly_path, _final_sanitize_ly_text(comment_block + wrapped))
-        else:
-            # normal case: write the hybrid content
-            _safe_write_text(ly_path, _final_sanitize_ly_text(comment_block + wrapped))
-    except Exception:
-        _safe_write_text(ly_path, _final_sanitize_ly_text(wrapped))
-    # The .ly file already contains a commented comparison block (tinyNotation
-    # + lily tokens). We will produce a small JSON events file that browser
-    # players can use as a lightweight fallback. If we emitted a manual
-    # full-score from the original \relative snippet (manual_emitted), then
-    # build the JSON from the generated MIDI so it matches LilyPond's
-    # interpretation exactly. Otherwise build events from the music21 Parts.
-    manual_emitted = locals().get('manual_emitted', False)
-
-    print(f"Compiling {ly_path} with LilyPond...")
-    # Run lilypond in the output directory so auxiliary files land there
-    subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir))
-
-    # Final safeguard: if the parser provided an original \relative
-    # snippet but the written .ly does not contain that snippet (for
-    # example, because hybrid emission changed tokens), overwrite the
-    # .ly with a minimal file that embeds the original snippet verbatim.
-    try:
-        if isinstance(score_data, dict):
-            orig_in = score_data.get('metadata', {}).get('original_input')
-            if isinstance(orig_in, str) and '\\relative' in orig_in:
-                # Check whether the just-written .ly contains the verbatim snippet
-                try:
-                    written = ly_path.read_text(encoding='utf8')
-                except Exception:
-                    written = ''
-                if orig_in not in written:
-                    print('[info] Overwriting .ly with verbatim original \relative snippet to preserve accidentals/octaves')
-                    manual = []
-                    manual.append('% ======= Verbatim \relative snippet (override) =======')
-                    if comment_text_prefix:
-                        manual.append(comment_text_prefix.rstrip())
-                    manual.append('')
-                    manual.append('\\version "2.24.1"')
-                    manual.append('\\language "english"')
-                    manual.append('\\header {')
-                    manual.append(f'    title = "{out_path.stem} (generated)"')
-                    manual.append('    composer = "Python + music21 + Abjad"')
-                    manual.append('}')
-                    manual.append('')
-                    manual.append('\\score {')
-                    manual.append('  \\new Staff {')
-                    manual.append('    ' + orig_in)
-                    manual.append('  }')
-                    manual.append('  \\layout { }')
-                    manual.append('  \\midi { }')
-                    manual.append('}')
-                    full_text = "\n".join(manual) + "\n"
-                    _safe_write_text(ly_path, _final_sanitize_ly_text(full_text))
-                    subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir))
-    except Exception:
-        pass
-
-    # Now produce JSON events. If we emitted a manual full-score, parse the
-    # generated MIDI and derive events from it to guarantee consistency with
-    # the engraved PDF/MIDI; otherwise derive events from the music21 Parts.
-    try:
-        import json
-        from music21 import converter as m21converter
-        # Determine BPM first (prefer a MetronomeMark from source_for_directives)
-        bpm = None
-        try:
-            from music21 import tempo as m21tempo
-            if source_for_directives is not None:
-                tlist = list(source_for_directives.recurse().getElementsByClass(m21tempo.MetronomeMark))
-                if tlist and getattr(tlist[0], 'number', None):
-                    bpm = float(tlist[0].number)
-            if bpm is None:
-                for p in parts.values():
-                    if p is None: continue
-                    tlist = list(p.recurse().getElementsByClass(m21tempo.MetronomeMark))
-                    if tlist and getattr(tlist[0], 'number', None):
-                        bpm = float(tlist[0].number)
-                        break
-        except Exception:
-            bpm = None
-        if bpm is None:
-            bpm = 120.0
-
-        seconds_per_quarter = 60.0 / float(bpm)
-
-        json_out = {'bpm': bpm, 'parts': {}}
-
-        if manual_emitted:
-            # parse the output MIDI to extract events
-            midi_path = out_dir / f"{out_path.stem}.midi"
-            try:
-                s = m21converter.parse(str(midi_path))
-                events = []
-                for n in s.flat.notes:
-                    events.append({'time': float(n.offset) * seconds_per_quarter, 'name': n.nameWithOctave, 'duration': float(n.quarterLength) * seconds_per_quarter, 'velocity': 0.9})
-                json_out['parts'][next(iter(parts.keys()))] = events
-            except Exception:
-                # fallback to deriving from music21 parts
-                manual_emitted = False
-
-        if not manual_emitted:
-            for name, part in parts.items():
-                if part is None:
-                    continue
-                events = []
-                try:
-                    for el in part.flatten().notesAndRests:
-                        if getattr(el, 'isRest', False):
-                            continue
-                        offset_q = getattr(el, 'offset', None)
-                        ql = getattr(el, 'quarterLength', None) or 0.0
-                        if offset_q is None:
-                            continue
-                        start_s = float(offset_q) * seconds_per_quarter
-                        dur_s = float(ql) * seconds_per_quarter
-                        if isinstance(el, music21.chord.Chord):
-                            for p in el.pitches:
-                                events.append({'time': start_s, 'name': p.nameWithOctave, 'duration': dur_s, 'velocity': 0.9})
-                        elif isinstance(el, music21.note.Note):
-                            events.append({'time': start_s, 'name': el.pitch.nameWithOctave, 'duration': dur_s, 'velocity': 0.9})
-                except Exception:
-                    pass
-                json_out['parts'][name] = events
-
-        json_path = out_dir / f"{out_path.stem}.json"
-        try:
-            with json_path.open('w', encoding='utf8') as fh:
-                json.dump(json_out, fh, indent=2)
-            print(f"Wrote JSON events file: {json_path}")
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-# ==============================
-# Demo / main
-# ==============================
-def engrave_with_abjad(score_data: dict, output_filename: str):
-    """
-    Decoupled engraver: consumes a standard score_data dict and uses Abjad
-    to render a LilyPond file and attempt to compile it. This function
-    intentionally does not depend on music21 objects.
-    """
-    print(f"🎶 Engraving '{score_data.get('metadata', {}).get('title', '')}' with Abjad...")
-    # Heuristic: prefer the verbatim/manual .ly strong-path when we have
-    # textual provenance or the parser emitted warnings that suggest
-    # the original input carries important semantics (e.g. \relative).
-    manual_multi_fallback = False
-    try:
-        meta = score_data.get('metadata', {}) if isinstance(score_data, dict) else {}
-        orig_in = meta.get('original_input')
-        # Respect explicit overrides from CLI/metadata
-        if meta.get('force_verbatim'):
-            print('[override] force_verbatim set in metadata — using verbatim emission')
-            manual_multi_fallback = True
-        if meta.get('force_hybrid'):
-            print('[override] force_hybrid set in metadata — forcing hybrid path')
-            manual_multi_fallback = False
-        if orig_in and ('\\relative' in orig_in or '\\relative' in str(orig_in).lower()):
-            print('[heuristic] Detected \relative in original input — using verbatim emission')
-            manual_multi_fallback = True
-        # If parser attached warnings, prefer verbatim
-        if meta.get('warnings'):
-            print('[heuristic] Parser warnings present — using verbatim emission')
-            manual_multi_fallback = True
-        # If per-note original tokens exist in the events, prefer verbatim
-        for pname, evs in score_data.get('parts', {}).items():
-            for ev in (evs or []):
-                if ev.get('_orig_token') or ev.get('_orig_pitch_token'):
-                    print('[heuristic] Found original token metadata in events — using verbatim emission')
-                    manual_multi_fallback = True
-                    break
-            if manual_multi_fallback:
-                break
-    except Exception:
-        manual_multi_fallback = False
-    # If the parser provided warnings, print them and make them visible
-    try:
-        meta_warnings = score_data.get('metadata', {}).get('warnings') if isinstance(score_data, dict) else None
-        if meta_warnings:
-            print('[parser warnings] Detected issues during parsing:')
-            for w in meta_warnings:
-                print(' -', w)
-    except Exception:
-        pass
-    try:
-        meta_suggestions = score_data.get('metadata', {}).get('suggestions') if isinstance(score_data, dict) else None
-        if meta_suggestions:
-            print('[parser suggestions] Suggested fixes:')
-            for s in meta_suggestions:
-                print(' -', s)
-    except Exception:
-        pass
-    staffs = []
-
-    # If heuristic selected the verbatim/manual emission path, assemble
-    # a deterministic manual .ly using the canonical score_data and
-    # write it directly (this preserves \relative semantics exactly).
-    if manual_multi_fallback:
-        try:
-            # Reuse existing manual emission code path by constructing the
-            # same token bodies and writing a minimal .ly file. This keeps
-            # audit headers intact and avoids Abjad respelling.
-            out_dir = Path('outputs')
-            out_dir.mkdir(exist_ok=True)
-            ly_path = out_dir / f"{output_filename}.ly"
-            # Build part bodies from canonical data
-            def _part_tokens_from_events(events):
-                toks = []
+        if is_multi_voice:
+            # Multi-voice polyphonic structure: dict of voice names to event lists
+            voice_bodies = []
+            for voice_name, events in events_or_voices.items():
+                voice_tokens = []
                 for ev in events:
-                    t = ev.get('type')
-                    ql = float(ev.get('ql', 1.0)) if ev.get('ql') is not None else 1.0
-                    dur = ql_to_lily_duration_string(ql)
-                    if t == 'rest':
-                        toks.append(f"r{dur}")
-                    elif t == 'note':
-                        step = (ev.get('step') or 'c').lower()
-                        alter = int(ev.get('alter', 0) or 0)
-                        octave = int(ev.get('octave', 4) or 4)
-                        acc = 'is' if alter > 0 else ('es' if alter < 0 else '')
-                        try:
-                            oct_marks = "'" * max(0, octave - 3) if octave >= 3 else "," * max(0, 3 - octave)
-                        except Exception:
-                            oct_marks = ''
-                        tok = f"{step}{acc}{oct_marks}{dur}"
-                        if ev.get('warning'):
-                            tok = f"% * {tok}"
-                        toks.append(tok)
-                    elif t == 'chord':
-                        parts = []
-                        for p in ev.get('pitches', []):
-                            s = (p.get('step') or 'c').lower()
-                            a = int(p.get('alter', 0) or 0)
-                            o = int(p.get('octave', 4) or 4)
-                            accp = 'is' if a > 0 else ('es' if a < 0 else '')
-                            try:
-                                om = "'" * max(0, o - 3) if o >= 3 else "," * max(0, 3 - o)
-                            except Exception:
-                                om = ''
-                            parts.append(f"{s}{accp}{om}")
-                        toks.append(f"<{' '.join(parts)}>{dur}")
-                return ' '.join(toks)
-
-            part_bodies = {}
-            for pname, events in score_data.get('parts', {}).items():
-                part_bodies[pname] = _part_tokens_from_events(events)
-
-            manual_lines = []
-            if len(part_bodies) > 1:
-                manual_lines.append('<<')
-            for pname, body in part_bodies.items():
-                manual_lines.append(f"  \\new Staff {{ % Part: {pname}")
-                manual_lines.append(f"    {body or 'r4'}")
-                manual_lines.append('  }')
-            if len(part_bodies) > 1:
-                manual_lines.append('>>')
-
-            ly_text = "\n".join(["\\score {", "  \\new Score", *manual_lines, "  \\layout { }", "  \\midi { }", "}"]) + "\n"
-            # Add audit header
-            prefix_lines = []
-            orig = score_data.get('metadata', {}).get('original_input')
-            if orig:
-                prefix_lines.append('% === Original snippet (from metadata) ===')
-                for ln in str(orig).splitlines():
-                    prefix_lines.append('% ' + ln)
-                prefix_lines.append('%')
-            emitted = ''
-            try:
-                emitted = '\n'.join([f"[{p}] {part_bodies.get(p, '')}" for p in part_bodies])
-            except Exception:
-                emitted = ''
-            if emitted:
-                prefix_lines.append('% === Emitted tokens derived from score_data ===')
-                for ln in emitted.splitlines():
-                    prefix_lines.append('% ' + ln)
-                prefix_lines.append('%')
-
-            if prefix_lines:
-                ly_text = '\n'.join(prefix_lines) + '\n\n' + ly_text
-
-            sanitized = _final_sanitize_ly_text(ly_text)
-            _safe_write_text(ly_path, sanitized)
-            print(f"Wrote verbatim \relative .ly (heuristic strong-path): {ly_path}")
-            try:
-                subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir))
-            except FileNotFoundError:
-                print('lilypond not found; skipping compilation')
-            return
-        except Exception as e:
-            print('[error] verbatim emission failed:', e)
-            # Fall through to hybrid path
-            pass
-
-    # Build voices/staffs from data dictionary
-    for part_name, events in score_data.get("parts", {}).items():
-        voice_components = []
-        for event in events:
-            ql = float(event.get("ql", 1.0))
-            # Compute an Abjad duration (fraction of whole note)
-            try:
-                frac = Fraction(ql).limit_denominator(1024)
-            except Exception:
-                frac = Fraction(str(ql)).limit_denominator(1024)
-            try:
-                dur = abjad.Duration(Fraction(frac, 4))
-            except Exception:
-                # fallback to textual duration
-                dur = None
-
-            component = None
-            if event.get("type") == "rest":
-                if dur is not None:
-                    component = abjad.Rest(dur)
-                else:
-                    # fallback: emit a literal rest token inside a Skip
-                    component = abjad.Rest(abjad.Duration(1, 4))
-            elif event.get("type") == "note":
-                try:
-                    pitch = _build_abjad_pitch(event)
-                    if dur is not None:
-                        component = abjad.Note(pitch, dur)
-                    else:
-                        component = abjad.Note(pitch, abjad.Duration(1, 4))
-                except Exception:
-                    component = None
-            elif event.get("type") == "chord":
-                try:
-                    pitches = [_build_abjad_pitch(p) for p in event.get('pitches', [])]
-                    if dur is not None:
-                        component = abjad.Chord(pitches, dur)
-                    else:
-                        component = abjad.Chord(pitches, abjad.Duration(1, 4))
-                except Exception:
-                    component = None
-
-            if component is not None:
-                voice_components.append(component)
-        # Wrap literal components in a Voice so Abjad accepts LilyPondLiteral
-        try:
-            voice = abjad.Voice(voice_components, name=part_name)
-            staff = abjad.Staff([voice], name=part_name)
-        except Exception:
-            # Fallback: try to place components directly (best-effort)
-            staff = abjad.Staff(voice_components, name=part_name)
-        staffs.append(staff)
-
-    # Attach metadata to first staff
-    if staffs:
-        first_staff = staffs[0]
-        try:
-            md = score_data.get("metadata", {})
-            first_leaf = abjad.select.leaf(first_staff, 0)
-            # clef
-            if any(k in (first_staff.name or '').lower() for k in ("harmony", "bass")):
-                abjad.attach(abjad.Clef("bass"), first_leaf)
-            else:
-                abjad.attach(abjad.Clef("treble"), first_leaf)
-            # time
-            if "time_signature" in md:
-                num, den = map(int, md["time_signature"].split('/'))
-                abjad.attach(abjad.TimeSignature((num, den)), first_leaf)
-            # key
-            if "key_signature" in md:
-                tonic = md["key_signature"].get("tonic", "c").lower()
-                mode = md["key_signature"].get("mode", "major").lower()
-                try:
-                    abjad.attach(abjad.KeySignature(abjad.NamedPitchClass(tonic), abjad.Mode(mode)), first_leaf)
-                except Exception:
-                    pass
-            # tempo
-            if "tempo" in md:
-                try:
-                    abjad.attach(abjad.MetronomeMark(abjad.Duration(1, 4), int(md["tempo"])), first_leaf)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    # Assemble score
-    if len(staffs) > 1:
-        score_item = abjad.StaffGroup(staffs, lilypond_type="PianoStaff")
-        score = abjad.Score([score_item])
-    elif staffs:
-        score = abjad.Score([staffs[0]])
-    else:
-        score = abjad.Score([abjad.Staff()])
-
-    header_block = abjad.Block(name="header", items=[
-        f'title = "{score_data.get("metadata", {}).get("title", "Untitled")}"',
-        f'composer = "{score_data.get("metadata", {}).get("composer", "Unknown")}"',
-    ])
-
-    # Wrap the score, layout, and midi in an explicit \score block so
-    # LilyPond associates the \midi block with the score and actually
-    # emits MIDI output.
-    score_block = abjad.Block(name="score", items=[score, abjad.Block(name="layout"), abjad.Block(name="midi")])
-    # If the score_data contains an original_input (the raw lily snippet),
-    # prepare a sanitized string of % comment lines to prefix to the .ly.
-    original_input = score_data.get('metadata', {}).get('original_input') if isinstance(score_data, dict) else None
-    # If parser warnings exist in metadata, include them in the comment prefix
-    parse_warnings_meta = score_data.get('metadata', {}).get('warnings') if isinstance(score_data, dict) else None
-    if parse_warnings_meta:
-        # append warnings to the original_input string so they'll appear in the % header
-        warn_block = '\n'.join(parse_warnings_meta)
-        if original_input:
-            original_input = original_input + '\n\nParser warnings:\n' + warn_block
+                    ql = ev.get('ql', 1.0)
+                    dur_str = ql_to_lily_duration_string(ql)
+                    if ev.get('type') == 'rest':
+                        voice_tokens.append(f"r{dur_str}")
+                    elif ev.get('type') == 'chord':
+                        # Handle chord events - format as <pitch1 pitch2 pitch3>duration
+                        chord_pitches = []
+                        for pitch_data in ev.get('pitches', []):
+                            step = pitch_data.get('step', 'c').lower()
+                            alter = pitch_data.get('alter', 0)
+                            acc = ''
+                            if alter == 1: acc = 'is'
+                            elif alter == -1: acc = 'es'
+                            octave = pitch_data.get('octave', 4)
+                            if octave == 4:
+                                pitch_text = f"{step}{acc}"
+                            elif octave > 4:
+                                marks = "'" * (octave - 4)
+                                pitch_text = f"{step}{acc}{marks}"
+                            else:
+                                marks = "," * (4 - octave)
+                                pitch_text = f"{step}{acc}{marks}"
+                            chord_pitches.append(pitch_text)
+                        chord_str = f"<{' '.join(chord_pitches)}>{dur_str}"
+                        voice_tokens.append(chord_str)
+                    elif ev.get('type') == 'note':
+                        step = ev.get('step', 'c').lower()
+                        alter = ev.get('alter', 0)
+                        acc = ''
+                        if alter == 1: acc = 'is'
+                        elif alter == -1: acc = 'es'
+                        octave = ev.get('octave', 4)
+                        if octave == 4:
+                            pitch_text = f"{step}{acc}"
+                        elif octave > 4:
+                            marks = "'" * (octave - 4)
+                            pitch_text = f"{step}{acc}{marks}"
+                        else:
+                            marks = "," * (4 - octave)
+                            pitch_text = f"{step}{acc}{marks}"
+                        voice_tokens.append(f"{pitch_text}{dur_str}")
+                voice_body = " ".join(voice_tokens)
+                voice_bodies.append(f"{{ {voice_body} }}")
+            
+            # Combine voices with LilyPond polyphonic syntax: << {...} \\ {...} >>
+            separator = ' \\\\ '
+            body = f"<< {separator.join(voice_bodies)} >>"
         else:
-            original_input = 'Parser warnings:\n' + warn_block
-    # include suggestions too if present
-    try:
-        parse_suggestions_meta = score_data.get('metadata', {}).get('suggestions') if isinstance(score_data, dict) else None
-        if parse_suggestions_meta:
-            sug_block = '\n'.join(parse_suggestions_meta)
-            if original_input:
-                original_input = original_input + '\n\nParser suggestions:\n' + sug_block
-            else:
-                original_input = 'Parser suggestions:\n' + sug_block
-    except Exception:
-        pass
-    comment_text_prefix = None
+            # Single-voice structure: list of events (backward compatible)
+            events = events_or_voices
+            part_tokens = []
+            for ev in events:
+                ql = ev.get('ql', 1.0)
+                dur_str = ql_to_lily_duration_string(ql)
+                if ev.get('type') == 'rest':
+                    part_tokens.append(f"r{dur_str}")
+                elif ev.get('type') == 'chord':
+                    # Handle chord events - format as <pitch1 pitch2 pitch3>duration
+                    chord_pitches = []
+                    for pitch_data in ev.get('pitches', []):
+                        step = pitch_data.get('step', 'c').lower()
+                        alter = pitch_data.get('alter', 0)
+                        acc = ''
+                        if alter == 1: acc = 'is'
+                        elif alter == -1: acc = 'es'
+                        octave = pitch_data.get('octave', 4)
+                        if octave == 4:
+                            pitch_text = f"{step}{acc}"
+                        elif octave > 4:
+                            marks = "'" * (octave - 4)
+                            pitch_text = f"{step}{acc}{marks}"
+                        else:
+                            marks = "," * (4 - octave)
+                            pitch_text = f"{step}{acc}{marks}"
+                        chord_pitches.append(pitch_text)
+                    chord_str = f"<{' '.join(chord_pitches)}>{dur_str}"
+                    part_tokens.append(chord_str)
+                elif ev.get('type') == 'note':
+                    step = ev.get('step', 'c').lower()
+                    alter = ev.get('alter', 0)
+                    acc = ''
+                    if alter == 1: acc = 'is'
+                    elif alter == -1: acc = 'es'
+                    octave = ev.get('octave', 4)
+                    if octave == 4:
+                        pitch_text = f"{step}{acc}"
+                    elif octave > 4:
+                        marks = "'" * (octave - 4)
+                        pitch_text = f"{step}{acc}{marks}"
+                    else:
+                        marks = "," * (4 - octave)
+                        pitch_text = f"{step}{acc}{marks}"
+                    part_tokens.append(f"{pitch_text}{dur_str}")
+            body = " ".join(part_tokens)
+        
+        clef = "bass" if "harmony" in part_name.lower() else "treble"
+        # --- NEW: Add LilyPond directives from metadata ---
+        staff_directives = []
+        if 'time_signature' in metadata:
+            staff_directives.append(f"\\time {metadata['time_signature']}")
+        if 'key_signature' in metadata:
+            key_sig = metadata['key_signature']
+            if isinstance(key_sig, dict):
+                tonic = key_sig.get('tonic', 'c')
+                mode = key_sig.get('mode', 'major')
+                staff_directives.append(f"\\key {tonic} \\{mode}")
+        if 'tempo' in metadata:
+            tempo_data = metadata['tempo']
+            if isinstance(tempo_data, dict):
+                beat_duration = tempo_data.get('beat_duration', 4)
+                bpm = tempo_data.get('bpm', 120)
+                staff_directives.append(f"\\tempo {beat_duration} = {bpm}")
+            elif isinstance(tempo_data, int):
+                staff_directives.append(f"\\tempo 4 = {tempo_data}")
+        directives_str = " ".join(staff_directives)
+        if directives_str:
+            staff_content = f"\\new Staff {{\n  \\clef {clef}\n  {directives_str}\n  {body}\n}}"
+        else:
+            staff_content = f"\\new Staff {{\n  \\clef {clef}\n  {body}\n}}"
+        staves.append(staff_content)
+    score_block = f"<<\n{''.join(staves)}\n>>" if len(staves) > 1 else staves[0]
+
+    # Build comment section with original LilyPond snippets if available
+    comment_section = ""
+    original_input = score_data.get('metadata', {}).get('original_input', '')
     if original_input:
-        # produce a plain string containing % prefixed lines (not an Abjad Block)
-        comment_text_prefix = _sanitize_comment_text(original_input)
+        comment_section = f"""% ========================================
+% ORIGINAL LILYPOND INPUT (for reference)
+% ========================================
+% {original_input.replace(chr(10), chr(10) + '% ')}
+%
+% ========================================
 
-    items = ["\\version \"2.24.1\"", header_block, score_block]
-    lilypond_file = abjad.LilyPondFile(items=items)
+"""
 
-    # If the parser provided an original Lily snippet that contains a
-    # \relative block, prefer emitting that snippet verbatim inside a
-    # minimal \\score/Staff so LilyPond's own relative-octave rules are
-    # used exactly as the user wrote them. This ensures the engraved
-    # PDF/MIDI reflect the original relative semantics (e.g. first
-    # measure resolves as E4 B3 C4 R1 when the snippet intends that).
+    ly_content = f'\\version "2.24.1"\n{comment_section}\\header {{ title = "{title}" }}\n\\score {{\n  {score_block}\n  \\layout {{ }}\n  \\midi {{ }}\n}}'
+    ly_path.write_text(ly_content)
+    print(f"Wrote LilyPond file: {ly_path}")
     try:
-        if isinstance(score_data, dict):
-            orig_in = score_data.get('metadata', {}).get('original_input')
-            if isinstance(orig_in, str) and '\\relative' in orig_in:
-                out_path = Path(output_file)
-                if out_path.parent == Path('.') or str(out_path.parent) == '':
-                    out_dir = Path('outputs')
-                else:
-                    out_dir = out_path.parent
-                out_dir.mkdir(parents=True, exist_ok=True)
-                ly_filename = out_path.with_suffix('.ly').name
-                ly_path = out_dir / ly_filename
+        subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir), capture_output=True, text=True, check=True)
+        print(f"✅ Successfully compiled {output_basename}.pdf and .midi")
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"⚠️ Could not compile with LilyPond. Error:\n{getattr(e, 'stderr', e)}")
 
-                # Build a small Lily file using the original snippet verbatim
-                manual = []
-                manual.append('% ======= Emitted original \relative snippet =======')
-                if comment_text_prefix:
-                    manual.append(comment_text_prefix.rstrip())
-                manual.append('')
-                manual.append('\\version "2.24.1"')
-                manual.append('\\language "english"')
-                manual.append('\\header {')
-                manual.append(f'    title = "{out_path.stem} (generated)"')
-                manual.append('    composer = "Python + music21 + Abjad"')
-                manual.append('}')
-                manual.append('')
-                manual.append('\\score {')
-                manual.append('  \\new Staff {')
-                # Place the user's original snippet verbatim; do not modify it
-                manual.append('    ' + orig_in)
-                manual.append('  }')
-                manual.append('  \\layout { }')
-                manual.append('  \\midi { }')
-                manual.append('}')
-                full_text = "\n".join(manual) + "\n"
-                _safe_write_text(ly_path, _final_sanitize_ly_text(full_text))
-                print(f"Wrote manual .ly from original \relative snippet: {ly_path}")
-                # Compile with LilyPond
-                subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir))
-                # Also return here since we've emitted the user's original snippet
-                return
-    except Exception:
-        # Fall back to the generated Abjad content below
-        pass
 
-    # STRONG-PATH: If we still have an original_input with a \relative
-    # snippet, always prefer verbatim emission unless the caller explicitly
-    # requested Abjad hybrid output (future flag). This early check ensures
-    # that even if subsequent logic attempted a hybrid file, the user's
-    # \\relative semantics are respected by default.
-    try:
-        if isinstance(score_data, dict):
-            orig_in = score_data.get('metadata', {}).get('original_input')
-            if isinstance(orig_in, str) and '\\relative' in orig_in:
-                out_path = Path(output_file)
-                if out_path.parent == Path('.') or str(out_path.parent) == '':
-                    out_dir = Path('outputs')
-                else:
-                    out_dir = out_path.parent
-                out_dir.mkdir(parents=True, exist_ok=True)
-                ly_filename = out_path.with_suffix('.ly').name
-                ly_path = out_dir / ly_filename
-
-                manual = []
-                if comment_text_prefix:
-                    manual.append(comment_text_prefix.rstrip())
-                manual.append('')
-                manual.append('\\version "2.24.1"')
-                manual.append('\\language "english"')
-                manual.append('\\header {')
-                manual.append(f'    title = "{out_path.stem} (generated)"')
-                manual.append('    composer = "Python + music21 + Abjad"')
-                manual.append('}')
-                manual.append('')
-                manual.append('\\score {')
-                manual.append('  \\new Staff {')
-                manual.append('    ' + orig_in)
-                manual.append('  }')
-                manual.append('  \\layout { }')
-                manual.append('  \\midi { }')
-                manual.append('}')
-                full_text = "\n".join(manual) + "\n"
-                _safe_write_text(ly_path, _final_sanitize_ly_text(full_text))
-                print(f"Wrote verbatim \relative .ly (strong-path): {ly_path}")
-                subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir))
-                return
-    except Exception:
-        pass
-
+def export_to_musicxml(score_data: dict, output_basename: str):
+    """
+    Reconstructs a music21.Score from score_data and exports to MusicXML.
+    
+    This function enables MuseScore compatibility by:
+    1. Converting score_data dict back to music21.Score
+    2. Adding metadata (title, composer)
+    3. Exporting to .musicxml format
+    
+    Multi-voice handling:
+    - Currently, each voice in a multi-voice part exports to its own staff
+    - This is a limitation of the music21 library's voice handling
+    - Users can group/combine staves manually in MuseScore if desired
+    - All musical content is preserved correctly
+    
+    Args:
+        score_data: The score data dictionary
+        output_basename: Base name for output file (e.g., 'ninth')
+    """
+    from music_data import data_to_part
+    import music21
+    
+    title = score_data.get('metadata', {}).get('title', 'Untitled')
+    print(f"🎵 Exporting '{title}' to MusicXML...")
+    
+    # Create the main score object
+    score = music21.stream.Score()
+    
+    # Add metadata to the score
+    metadata = score_data.get('metadata', {})
+    score.metadata = music21.metadata.Metadata()
+    
+    if 'title' in metadata:
+        score.metadata.title = metadata['title']
+    if 'composer' in metadata:
+        score.metadata.composer = metadata.get('composer', '')
+    if 'tagline' in metadata:
+        # MusicXML doesn't have tagline, but we can add it as copyright
+        score.metadata.copyright = metadata.get('tagline', '')
+    
+    # Reconstruct parts from the score_data dictionary
+    for part_name, part_content in score_data.get('parts', {}).items():
+        if isinstance(part_content, dict):
+            # Multi-voice part (e.g., {'Soprano': [...], 'Alto': [...]})
+            # Each voice becomes a separate staff in MusicXML
+            for voice_name, voice_events in sorted(part_content.items()):
+                voice_part = data_to_part(voice_events, metadata)
+                voice_part.id = f"{part_name}_{voice_name}"
+                voice_part.partName = f"{part_name} - {voice_name}"
+                score.insert(0, voice_part)
+            
+        else:
+            # Single-voice part (just a list of events)
+            part = data_to_part(part_content, metadata)
+            part.id = part_name
+            part.partName = part_name
+            score.insert(0, part)
+    
+    # Write the file
     out_dir = Path('outputs')
-    out_dir.mkdir(exist_ok=True)
-    ly_path = out_dir / f"{output_filename}.ly"
-
-    # Build a deterministic LilyPond body from the canonical score_data
-    # token stream rather than relying on Abjad's serialization which
-    # can respell accidentals or alter octave marks. We will still use
-    # the comment prefix assembled below.
-    def _part_tokens_from_events(events):
-        toks = []
-        for ev in events:
-            t = ev.get('type')
-            ql = float(ev.get('ql', 1.0)) if ev.get('ql') is not None else 1.0
-            dur = ql_to_lily_duration_string(ql)
-            if t == 'rest':
-                toks.append(f"r{dur}")
-            elif t == 'note':
-                step = (ev.get('step') or 'c').lower()
-                alter = int(ev.get('alter', 0) or 0)
-                octave = int(ev.get('octave', 4) or 4)
-                acc = 'is' if alter > 0 else ('es' if alter < 0 else '')
-                try:
-                    oct_marks = "'" * max(0, octave - 3) if octave >= 3 else "," * max(0, 3 - octave)
-                except Exception:
-                    oct_marks = ''
-                tok = f"{step}{acc}{oct_marks}{dur}"
-                if ev.get('warning'):
-                    tok = f"% * {tok}"
-                toks.append(tok)
-            elif t == 'chord':
-                parts = []
-                for p in ev.get('pitches', []):
-                    s = (p.get('step') or 'c').lower()
-                    a = int(p.get('alter', 0) or 0)
-                    o = int(p.get('octave', 4) or 4)
-                    accp = 'is' if a > 0 else ('es' if a < 0 else '')
-                    try:
-                        om = "'" * max(0, o - 3) if o >= 3 else "," * max(0, 3 - o)
-                    except Exception:
-                        om = ''
-                    parts.append(f"{s}{accp}{om}")
-                toks.append(f"<{' '.join(parts)}>{dur}")
-        return ' '.join(toks)
-
-    part_bodies = {}
-    for pname, events in score_data.get('parts', {}).items():
-        part_bodies[pname] = _part_tokens_from_events(events)
-
-    # Construct the manual LilyPond score body (without the comment prefix)
-    manual_lines = []
-    if len(part_bodies) > 1:
-        manual_lines.append('<<')
-    for pname, body in part_bodies.items():
-        # Use a double backslash so Python does not treat "\n" as a newline
-        # escape sequence; we need a literal backslash in the output LilyPond
-        # file ("\new Staff { ... }").
-        manual_lines.append(f"  \\new Staff {{ % Part: {pname}")
-        manual_lines.append(f"    {body or 'r4'}")
-        manual_lines.append('  }')
-    if len(part_bodies) > 1:
-        manual_lines.append('>>')
-
-    # Wrap in a score block; the final comment prefix will be added later
-    ly_text = "\n".join(["\\score {", "  \\new Score", *manual_lines, "  \\layout { }", "  \\midi { }", "}"]) + "\n"
-
-    # Build a compact comment prefix for the .ly containing:
-    # - the original snippet if present in metadata
-    # - a conservative emitted-token rendering derived from the score_data
-    # - a clear WARNING if the two differ (so mismatches are obvious)
-    comment_lines = []
+    out_dir.mkdir(parents=True, exist_ok=True)
+    xml_path = out_dir / f"{output_basename}.musicxml"
+    
     try:
-        original_input = score_data.get('metadata', {}).get('original_input') if isinstance(score_data, dict) else None
-    except Exception:
-        original_input = None
-
-    if original_input:
-        comment_lines.append('% === Original snippet (from metadata) ===')
-        for ln in str(original_input).splitlines():
-            comment_lines.append('% ' + ln)
-        comment_lines.append('%')
-
-    # Derive emitted tokens from the canonical score_data so we can compare
-    # them to the original snippet text (if available).
-    def _emitted_tokens_from_score(sd):
-        out_lines = []
-        try:
-            for pname, part in sd.get('parts', {}).items():
-                toks = []
-                for ev in part:
-                    t = ev.get('type')
-                    ql = float(ev.get('ql', 1.0)) if ev.get('ql') is not None else 1.0
-                    dur = ql_to_lily_duration_string(ql)
-                    if t == 'rest':
-                        toks.append(f"r{dur}")
-                    elif t == 'note':
-                        step = (ev.get('step') or 'c').lower()
-                        alter = int(ev.get('alter', 0) or 0)
-                        octave = int(ev.get('octave', 4) or 4)
-                        acc = 'is' if alter > 0 else ('es' if alter < 0 else '')
-                        try:
-                            oct_marks = "'" * max(0, octave - 3) if octave >= 3 else "," * max(0, 3 - octave)
-                        except Exception:
-                            oct_marks = ''
-                        toks.append(f"{step}{acc}{oct_marks}{dur}")
-                    elif t == 'chord':
-                        ps = ev.get('pitches', [])
-                        parts = []
-                        for p in ps:
-                            s = (p.get('step') or 'c').lower()
-                            a = int(p.get('alter', 0) or 0)
-                            o = int(p.get('octave', 4) or 4)
-                            acc = 'is' if a > 0 else ('es' if a < 0 else '')
-                            try:
-                                om = "'" * max(0, o - 3) if o >= 3 else "," * max(0, 3 - o)
-                            except Exception:
-                                om = ''
-                            parts.append(f"{s}{acc}{om}")
-                        toks.append(f"<{' '.join(parts)}>{dur}")
-                out_lines.append(f"[{pname}] " + ' '.join(toks))
-        except Exception:
-            return ''
-        return '\n'.join(out_lines)
-
-    emitted = _emitted_tokens_from_score(score_data)
-    if emitted:
-        comment_lines.append('% === Emitted tokens derived from score_data ===')
-        for ln in emitted.splitlines():
-            comment_lines.append('% ' + ln)
-        comment_lines.append('%')
-
-    # Conservative safety note: emitted tokens may include localized
-    # accidentals (is/es) or explicit octave marks (',' or "'"). In
-    # earlier versions we forced a manual verbatim .ly whenever such
-    # markers were present which prevented Abjad from handling many
-    # otherwise-safe cases. Instead of forcing a fallback here, log an
-    # informational message and rely on the verification pass below to
-    # decide whether a manual fallback is actually necessary.
-    try:
-        if emitted and re.search(r"\b(is|es)\b|[,']", emitted, re.IGNORECASE):
-            print('[info] Emitted tokens include accidentals/octave marks — verification will decide whether a manual fallback is needed')
-            # Do NOT set manual_multi_fallback here. The verification step
-            # that follows will inspect Abjad's rendered lily text and
-            # only set manual_multi_fallback when a real mismatch is found.
-    except Exception:
-        pass
-
-    # Simple normalization to detect obvious mismatches
-    def _norm(s):
-        return re.sub(r"\s+", ' ', str(s).strip()).lower()
-
-    if original_input and emitted and _norm(original_input) not in _norm(emitted):
-        comment_lines.append('% [WARNING] Emitted tokens DO NOT match the original snippet. See emitted tokens above.')
-        comment_lines.append('%')
-
-    if comment_lines:
-        prefix = '\n'.join(comment_lines) + '\n\n'
-        ly_text = prefix + ly_text
-
-    sanitized = _final_sanitize_ly_text(ly_text)
-    _safe_write_text(ly_path, sanitized)
-    print(f"Wrote Lily file to {ly_path}")
-
-    # Try compile and ensure MIDI was produced. If missing, retry with explicit format flags
-    try:
-        # Run LilyPond from the outputs directory and pass only the filename
-        proc = subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir), capture_output=True, text=True)
-        if proc.returncode != 0:
-            print("LilyPond failed:", proc.stderr[:2000])
-        else:
-            print("LilyPond compilation successful.")
-
-        # Check for MIDI output (common extensions are .midi and .mid)
-        midi_path_midi = out_dir / f"{output_filename}.midi"
-        midi_path_mid = out_dir / f"{output_filename}.mid"
-        if midi_path_midi.exists() or midi_path_mid.exists():
-            found = midi_path_midi if midi_path_midi.exists() else midi_path_mid
-            print(f"MIDI generated: {found}")
-        else:
-            # If LilyPond succeeded but no MIDI found, retry with explicit formats
-            print("Warning: MIDI file not found after first run. Retrying LilyPond with explicit formats (midi,pdf)...")
-            retry = subprocess.run(["lilypond", "--formats=midi,pdf", str(ly_path.name)], cwd=str(out_dir), capture_output=True, text=True)
-            if retry.returncode != 0:
-                print("Retry LilyPond failed:", retry.stderr[:2000])
-            else:
-                print("Retry LilyPond compilation successful.")
-            if midi_path_midi.exists() or midi_path_mid.exists():
-                found = midi_path_midi if midi_path_midi.exists() else midi_path_mid
-                print(f"MIDI generated after retry: {found}")
-            else:
-                print("Error: MIDI file still not found after retry. Checked for:", midi_path_midi, midi_path_mid)
-                # For debugging, show LilyPond stdout/stderr from both runs (truncated)
-                print("Initial run stdout:", (proc.stdout or '')[:1000])
-                print("Initial run stderr:", (proc.stderr or '')[:1000])
-                print("Retry run stdout:", (retry.stdout or '')[:1000])
-                print("Retry run stderr:", (retry.stderr or '')[:1000])
-    except FileNotFoundError:
-        print("lilypond not found; skipping compilation")
-
-
-def _build_abjad_pitch(p_data: dict) -> abjad.NamedPitch:
-    # Build a music21 Pitch object from the canonical data and
-    # convert it to a Lily-style pitch token using m21_pitch_to_lily
-    # (this handles accidentals and octave marks robustly). Then
-    # construct an abjad.NamedPitch from that token.
-    try:
-        step = p_data.get("step", "c")
-        alter = int(p_data.get("alter", 0))
-        octave_val = int(p_data.get("octave", 4))
-        p = music21.pitch.Pitch()
-        p.step = step.upper()
-        p.octave = octave_val
-        if alter != 0:
-            try:
-                p.accidental = music21.pitch.Accidental(alter)
-            except Exception:
-                # best-effort: set alter numerically
-                try:
-                    p.microtone = alter
-                except Exception:
-                    pass
-        # Use module-local helper to produce a Lily token (e.g. "bes'" or "f#")
-        lily_tok = m21_pitch_to_lily(p)
-        # Prefer music21's canonical nameWithOctave (e.g. 'B-4') which
-        # Abjad understands reliably. Fall back to the lily token if
-        # NamedPitch refuses the nameWithOctave form.
-        try:
-            return abjad.NamedPitch(p.nameWithOctave)
-        except Exception:
-            try:
-                return abjad.NamedPitch(lily_tok)
-            except Exception:
-                # last resort: try uppercase step + octave (no accidental)
-                try:
-                    basic = f"{p.step.upper()}{p.octave}"
-                    return abjad.NamedPitch(basic)
-                except Exception:
-                    raise
-    except Exception:
-        # Fallback to previous conservative string-based construction
-        step = p_data.get("step", "c").lower()
-        alter = int(p_data.get("alter", 0))
-        octave_val = int(p_data.get("octave", 4))
-        middle_c_octave = 4
-        octave_marks = ""
-        if octave_val > middle_c_octave:
-            octave_marks = "'" * (octave_val - middle_c_octave)
-        elif octave_val < middle_c_octave - 1:
-            octave_marks = "," * (middle_c_octave - 1 - octave_val)
-        accidental = ""
-        if alter == 1:
-            accidental = "is"
-        elif alter == -1:
-            accidental = "es"
-        elif alter == 2:
-            accidental = "isis"
-        elif alter == -2:
-            accidental = "eses"
-        return abjad.NamedPitch(f"{step}{accidental}{octave_marks}")
-
-
-def _final_sanitize_ly_text(s: str) -> str:
-    if s is None:
-        return ''
-    return re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]+", '', str(s))
-
-
-def _safe_write_text(path: Path, text: str):
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    try:
-        with tmp.open('w', encoding='utf8') as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(str(tmp), str(path))
+        score.write('musicxml', fp=str(xml_path))
+        
+        # Add helpful comment to the XML file about the structure
+        xml_content = xml_path.read_text()
+        
+        # Insert comment after XML declaration and DOCTYPE
+        comment = """<!--
+╔════════════════════════════════════════════════════════════════════════════╗
+║ CODEMPOSE MUSICXML EXPORT - STRUCTURE EXPLANATION                          ║
+╔════════════════════════════════════════════════════════════════════════════╗
+║                                                                            ║
+║ This MusicXML file contains all your musical data correctly.              ║
+║                                                                            ║
+║ STRUCTURE: Each voice is exported as a separate staff (Part).             ║
+║ This is a reliable approach that preserves all musical content.           ║
+║                                                                            ║
+║ WHY SEPARATE STAVES?                                                      ║
+║ - The music21 library has limitations with multi-voice staff grouping     ║
+║ - This approach ensures 100% data integrity and reliability               ║
+║ - All notes, rhythms, and articulations are preserved correctly           ║
+║                                                                            ║
+║ MUSESCORE WORKFLOW - COMBINING VOICES:                                    ║
+║                                                                            ║
+║ Use the "Implode" tool to merge staves into multi-voice staves:          ║
+║                                                                            ║
+║ 1. Select the measures from BOTH staves you want to combine               ║
+║    (Example: Click first measure of Soprano, Shift+Click last of Alto)   ║
+║                                                                            ║
+║ 2. Go to: Tools → Implode                                                 ║
+║                                                                            ║
+║ 3. Result: Lower staff moves to Voice 2 on upper staff                    ║
+║    (Stem directions adjust automatically)                                 ║
+║                                                                            ║
+║ 4. Delete the now-empty lower staff                                       ║
+║                                                                            ║
+║ Repeat for other voice pairs (Tenor + Bass, etc.)                         ║
+║                                                                            ║
+║ ALTERNATIVE: Use "Hide Empty Staves" (Format → Style → Score)             ║
+║                                                                            ║
+║ This workflow leverages Codempose's programmatic power while using        ║
+║ MuseScore for final layout—the best of both worlds!                       ║
+║                                                                            ║
+╚════════════════════════════════════════════════════════════════════════════╝
+-->
+"""
+        
+        # Find where to insert (after DOCTYPE)
+        doctype_end = xml_content.find('>', xml_content.find('<!DOCTYPE')) + 1
+        if doctype_end > 0:
+            xml_content = xml_content[:doctype_end] + '\n' + comment + xml_content[doctype_end:]
+            xml_path.write_text(xml_content)
+        
+        print(f"✅ Successfully exported {xml_path.name}")
+        print(f"   📂 Open in MuseScore: {xml_path}")
+        print(f"   📊 {len(score.parts)} staves exported (one per voice)")
+        print(f"   💡 See XML comment for MuseScore 'Implode' workflow")
     except Exception as e:
-        print(f"Error writing file: {e}")
-        if tmp.exists():
-            tmp.unlink()
-    
-    
-# -----------------------------------------------------------------
-# Compatibility wrapper
-# -----------------------------------------------------------------
-def _score_data_from_parts_dict(parts_dict: dict, default_title: str = 'Generated') -> dict:
-    """Convert an older-style mapping of name->music21.Part into the
-    canonical score_data dict used by the decoupled engraver.
+        print(f"⚠️ Could not export to MusicXML. Error:\n{e}")
+        import traceback
+        traceback.print_exc()
 
-    This is a small compatibility helper so code that still calls the
-    older API can continue to work while callers migrate to the
-    decoupled `score_data` format.
+
+def promote_shorthand_to_programmatic(file_path: Path, module) -> bool:
     """
-    try:
+    Convert VOICE_ASSIGNMENTS shorthand to programmatic Python code.
+    
+    Similar to promote_lilypond_to_tinynotation, this function:
+    1. Parses VOICE_ASSIGNMENTS shorthand
+    2. Generates equivalent programmatic Python code
+    3. Saves it to the file as PROGRAMMATIC_VOICE_GENERATION
+    4. Creates backup of original file
+    
+    Toggle: PROMOTE_TO_PROGRAMMATIC
+    - False (default): Use VOICE_ASSIGNMENTS shorthand
+    - True: Generate and save programmatic code
+    
+    Args:
+        file_path: Path to the study file
+        module: The loaded module
+    
+    Returns:
+        True if promotion succeeded, False otherwise
+    """
+    import shutil
+    from datetime import datetime
+    
+    print("\n" + "="*60)
+    
+    # Ensure outputs directory exists
+    out_dir = Path('outputs')
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check if programmatic version already exists
+    has_programmatic = hasattr(module, 'PROGRAMMATIC_VOICE_GENERATION')
+    
+    if has_programmatic:
+        # Scenario 1: Just toggle dominance
+        print("🔄 PROMOTION: Toggling shorthand vs programmatic dominance")
+        print("="*60)
+        
+        current_state = getattr(module, 'PROMOTE_TO_PROGRAMMATIC', False)
+        new_state = not current_state
+        
+        print(f"Current state: PROMOTE_TO_PROGRAMMATIC = {current_state}")
+        print(f"New state:     PROMOTE_TO_PROGRAMMATIC = {new_state}")
+        print()
+        
+        if new_state:
+            print("📝 Programmatic code will be PROCESSED (dominant)")
+            print("📋 Shorthand will be PRESERVED (reference)")
+        else:
+            print("📋 Shorthand will be PROCESSED (dominant)")
+            print("📝 Programmatic code will be PRESERVED (reference)")
+        
+        # Create backup
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = out_dir / f"{file_path.stem}.{timestamp}.bak"
+        shutil.copy2(file_path, backup_path)
+        
+        # Read and modify file
+        content = file_path.read_text()
+        pattern = r'PROMOTE_TO_PROGRAMMATIC\s*=\s*(True|False)'
+        
+        if re.search(pattern, content):
+            new_content = re.sub(pattern, f'PROMOTE_TO_PROGRAMMATIC = {new_state}', content)
+        else:
+            # Add the toggle near the top (after imports)
+            lines = content.split('\n')
+            insert_pos = 0
+            for i, line in enumerate(lines):
+                if line.strip() and not line.strip().startswith('#') and not line.strip().startswith('import') and not line.strip().startswith('from'):
+                    insert_pos = i
+                    break
+            lines.insert(insert_pos, f'\n# Toggle for programmatic dominance\nPROMOTE_TO_PROGRAMMATIC = {new_state}\n')
+            new_content = '\n'.join(lines)
+        
+        # Write back
+        file_path.write_text(new_content)
+        
+        print(f"\n✅ Toggle updated")
+        print(f"   Backup: {backup_path}")
+        print("="*60 + "\n")
+        
+        return True
+    
+    else:
+        # Scenario 2: Generate programmatic code from shorthand
+        print("🎯 PROMOTION: Generating programmatic code from shorthand")
+        print("="*60)
+        
+        if not hasattr(module, 'VOICE_ASSIGNMENTS'):
+            print("❌ No VOICE_ASSIGNMENTS found - cannot promote")
+            print("="*60 + "\n")
+            return False
+        
+        voice_assignments = module.VOICE_ASSIGNMENTS
+        
+        # Generate programmatic code
+        prog_code = generate_programmatic_from_shorthand(voice_assignments)
+        
+        # Create backup
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = out_dir / f"{file_path.stem}.{timestamp}.bak"
+        shutil.copy2(file_path, backup_path)
+        
+        # Read original content
+        content = file_path.read_text()
+        
+        # Find insertion point (after VOICE_ASSIGNMENTS)
+        lines = content.split('\n')
+        insert_pos = len(lines)
+        
+        # Find end of VOICE_ASSIGNMENTS
+        in_assignments = False
+        brace_count = 0
+        for i, line in enumerate(lines):
+            if 'VOICE_ASSIGNMENTS' in line and '=' in line:
+                in_assignments = True
+                brace_count = line.count('{') - line.count('}')
+            elif in_assignments:
+                brace_count += line.count('{') - line.count('}')
+                if brace_count == 0:
+                    insert_pos = i + 1
+                    break
+        
+        # Insert programmatic code
+        prog_section = [
+            "",
+            "# ============================================================================",
+            "# PROGRAMMATIC VOICE GENERATION (auto-generated from VOICE_ASSIGNMENTS)",
+            "# ============================================================================",
+            "# Toggle: PROMOTE_TO_PROGRAMMATIC = True to use this instead of shorthand",
+            "",
+            "PROGRAMMATIC_VOICE_GENERATION = '''",
+            prog_code,
+            "'''",
+            ""
+        ]
+        
+        for line in reversed(prog_section):
+            lines.insert(insert_pos, line)
+        
+        # Add toggle at the top if not present
+        if 'PROMOTE_TO_PROGRAMMATIC' not in content:
+            toggle_lines = [
+                "",
+                "# Toggle for programmatic dominance (set True to use generated code)",
+                "PROMOTE_TO_PROGRAMMATIC = False  # Set True after reviewing generated code",
+                ""
+            ]
+            # Insert after imports
+            import_end = 0
+            for i, line in enumerate(lines):
+                if line.strip() and not line.strip().startswith('#') and not line.strip().startswith('import') and not line.strip().startswith('from'):
+                    import_end = i
+                    break
+            for line in reversed(toggle_lines):
+                lines.insert(import_end, line)
+        
+        # Write modified content
+        new_content = '\n'.join(lines)
+        file_path.write_text(new_content)
+        
+        # Also save to outputs for inspection
+        output_copy = out_dir / file_path.name
+        output_copy.write_text(new_content)
+        
+        print(f"✅ Programmatic code generated and saved")
+        print(f"   Backup: {backup_path}")
+        print(f"   Modified: {file_path}")
+        print(f"   Copy: {output_copy}")
+        print()
+        print("📋 Review the generated PROGRAMMATIC_VOICE_GENERATION code")
+        print("   Then set PROMOTE_TO_PROGRAMMATIC = True to use it")
+        print("="*60 + "\n")
+        
+        return True
+
+
+def generate_programmatic_from_shorthand(voice_assignments: dict) -> str:
+    """
+    Generate programmatic Python code from VOICE_ASSIGNMENTS shorthand.
+    
+    This converts shorthand like:
+        'Soprano': 'THEME + transpose(THEME, 7)'
+    
+    To programmatic code like:
+        soprano_events = (
+            voice_lookup['THEME'] +
+            transpose_events(voice_lookup['THEME'], 7)
+        )
+    
+    Args:
+        voice_assignments: The VOICE_ASSIGNMENTS dictionary
+    
+    Returns:
+        String of Python code
+    """
+    lines = []
+    lines.append("def build_score_data_programmatic():")
+    lines.append('    """')
+    lines.append('    Auto-generated programmatic version of VOICE_ASSIGNMENTS.')
+    lines.append('    ')
+    lines.append('    This code was generated from the shorthand and can be modified.')
+    lines.append('    Set PROMOTE_TO_PROGRAMMATIC = True to use this version.')
+    lines.append('    """')
+    lines.append('    from lilypond_parser import parse_lilypond_to_data')
+    lines.append('    from composition_shorthand import transpose_events, invert_events, retrograde_events')
+    lines.append('    ')
+    lines.append('    # Parse all voice snippets (add your snippet parsing here)')
+    lines.append('    # Example:')
+    lines.append('    # theme_data = parse_lilypond_to_data(THEME_LILY, part_name="Theme")')
+    lines.append('    # voice_lookup = {"THEME": theme_data["parts"]["Theme"]}')
+    lines.append('    ')
+    lines.append('    voice_lookup = {}  # TODO: Add your snippet parsing')
+    lines.append('    ')
+    
+    # Generate code for each staff and voice
+    for staff_name, voices in voice_assignments.items():
+        lines.append(f'    # {staff_name} Staff')
+        
+        if isinstance(voices, dict):
+            for voice_name, expression in voices.items():
+                var_name = f"{voice_name.lower().replace(' ', '_')}_events"
+                lines.append(f'    ')
+                lines.append(f'    # {voice_name}: {expression}')
+                
+                # Parse the expression and generate code
+                prog_expr = convert_expression_to_programmatic(expression)
+                lines.append(f'    {var_name} = {prog_expr}')
+        else:
+            # Single voice (not a dict)
+            var_name = f"{staff_name.lower().replace(' ', '_')}_events"
+            lines.append(f'    ')
+            lines.append(f'    # {staff_name}: {voices}')
+            prog_expr = convert_expression_to_programmatic(voices)
+            lines.append(f'    {var_name} = {prog_expr}')
+        
+        lines.append('    ')
+    
+    # Build final score_data
+    lines.append('    # Assemble final score_data')
+    lines.append('    score_data = {')
+    lines.append('        "metadata": {')
+    lines.append('            "title": "Your Title",  # TODO: Set your title')
+    lines.append('            "composer": "Your Name",  # TODO: Set your composer')
+    lines.append('        },')
+    lines.append('        "parts": {')
+    
+    for staff_name, voices in voice_assignments.items():
+        if isinstance(voices, dict):
+            lines.append(f'            "{staff_name}": {{')
+            for voice_name in voices.keys():
+                var_name = f"{voice_name.lower().replace(' ', '_')}_events"
+                lines.append(f'                "{voice_name}": {var_name},')
+            lines.append('            },')
+        else:
+            var_name = f"{staff_name.lower().replace(' ', '_')}_events"
+            lines.append(f'            "{staff_name}": {var_name},')
+    
+    lines.append('        }')
+    lines.append('    }')
+    lines.append('    ')
+    lines.append('    return score_data')
+    
+    return '\n'.join(lines)
+
+
+def convert_expression_to_programmatic(expression: str) -> str:
+    """
+    Convert shorthand expression to programmatic Python code.
+    
+    Examples:
+        'THEME' -> 'voice_lookup["THEME"]'
+        'THEME * 3' -> 'voice_lookup["THEME"] * 3'
+        'THEME + VAR' -> 'voice_lookup["THEME"] + voice_lookup["VAR"]'
+        'transpose(THEME, 7)' -> 'transpose_events(voice_lookup["THEME"], 7)'
+        'invert(THEME)' -> 'invert_events(voice_lookup["THEME"])'
+        'retrograde(THEME)' -> 'retrograde_events(voice_lookup["THEME"])'
+    """
+    # Split by + for chaining
+    parts = [p.strip() for p in expression.split('+')]
+    prog_parts = []
+    
+    for part in parts:
+        # Check for transformation functions
+        if '(' in part and ')' in part:
+            func_match = re.match(r'(\w+)\((.*)\)', part)
+            if func_match:
+                func_name = func_match.group(1)
+                args_str = func_match.group(2)
+                args = [a.strip() for a in args_str.split(',')]
+                
+                # Convert function name
+                if func_name in ['transpose', 'invert', 'retrograde']:
+                    func_name_prog = f'{func_name}_events'
+                else:
+                    func_name_prog = func_name
+                
+                # Convert arguments
+                prog_args = []
+                for arg in args:
+                    if arg.isdigit() or (arg.startswith('-') and arg[1:].isdigit()):
+                        # Numeric argument
+                        prog_args.append(arg)
+                    elif arg.startswith("'") or arg.startswith('"'):
+                        # String argument
+                        prog_args.append(arg)
+                    else:
+                        # Voice name
+                        prog_args.append(f'voice_lookup["{arg}"]')
+                
+                prog_parts.append(f'{func_name_prog}({", ".join(prog_args)})')
+        
+        # Check for repetition
+        elif '*' in part:
+            voice_name, count = [x.strip() for x in part.split('*')]
+            prog_parts.append(f'voice_lookup["{voice_name}"] * {count}')
+        
+        # Simple voice reference
+        else:
+            prog_parts.append(f'voice_lookup["{part}"]')
+    
+    # Join with +
+    if len(prog_parts) == 1:
+        return prog_parts[0]
+    else:
+        return '(\n        ' + ' +\n        '.join(prog_parts) + '\n    )'
+
+
+def promote_lilypond_to_tinynotation(file_path: Path, module) -> bool:
+    """
+    Toggle format dominance: switch which format (LILY or TINY) gets processed.
+    
+    This function handles two scenarios:
+    
+    1. If SOURCE_MELODY_TINY exists: Toggle PROMOTE_TO_TINYNOTATION
+       - True = TinyNotation is dominant (gets processed)
+       - False = LilyPond is dominant (gets processed)
+    
+    2. If SOURCE_MELODY_TINY missing: Generate it from LILY and enable toggle
+       - Converts SOURCE_MELODY_LILY to TinyNotation
+       - Adds SOURCE_MELODY_TINY to the file
+       - Enables PROMOTE_TO_TINYNOTATION
+    
+    File management:
+    - Original file → outputs/filename.TIMESTAMP.bak (before modification)
+    - Modified file → root directory (replaces original)
+    - Modified file → outputs/filename.py (for inspection)
+    
+    Args:
+        file_path: Path to the study file
+        module: The loaded module
+    
+    Returns:
+        True if promotion succeeded, False otherwise
+    """
+    from lily_to_tiny import lily_to_tiny_notation
+    import shutil
+    from datetime import datetime
+    
+    print("\n" + "="*60)
+    
+    # Ensure outputs directory exists
+    out_dir = Path('outputs')
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check if TinyNotation already exists
+    has_tiny = hasattr(module, 'SOURCE_MELODY_TINY')
+    
+    if has_tiny:
+        # Scenario 1: Just toggle dominance
+        print("🔄 PROMOTION: Toggling format dominance")
+        print("="*60)
+        
+        current_state = getattr(module, 'PROMOTE_TO_TINYNOTATION', False)
+        new_state = not current_state
+        
+        print(f"Current: {'TinyNotation' if current_state else 'LilyPond'} is dominant")
+        print(f"New: {'TinyNotation' if new_state else 'LilyPond'} will be dominant")
+        
+        # Copy ORIGINAL file to outputs as backup BEFORE modification
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"{file_path.stem}.{timestamp}.bak"
+        backup_path = out_dir / backup_filename
+        shutil.copy2(file_path, backup_path)
+        print(f"💾 Original copied to: outputs/{backup_filename}")
+        
+        # Toggle the flag in the file
+        original_content = file_path.read_text()
+        new_content = original_content.replace(
+            f'PROMOTE_TO_TINYNOTATION = {current_state}',
+            f'PROMOTE_TO_TINYNOTATION = {new_state}'
+        )
+        
+        # Write MODIFIED file to root (replaces original)
+        file_path.write_text(new_content)
+        print(f"✅ Modified file written to: {file_path.name} (root)")
+        
+        # Copy MODIFIED file to outputs for inspection
+        modified_output_path = out_dir / file_path.name
+        shutil.copy2(file_path, modified_output_path)
+        print(f"📋 Modified file copied to: outputs/{file_path.name}")
+        
+        print("="*60 + "\n")
+        return True
+    
+    else:
+        # Scenario 2: Generate TinyNotation from LilyPond
+        print("🔄 PROMOTION: Generating TinyNotation from LilyPond")
+        print("="*60)
+        
+        lily_source = getattr(module, 'SOURCE_MELODY_LILY', None)
+        if not lily_source:
+            print("❌ No SOURCE_MELODY_LILY found in module")
+            return False
+        
+        print(f"📝 Converting: {lily_source[:60]}...")
+        
+        # Convert to TinyNotation
+        result = lily_to_tiny_notation(lily_source)
+        if not result.success:
+            print(f"❌ Conversion failed: {result.error}")
+            return False
+        
+        tiny_notation = result.tiny_notation
+        print(f"✅ TinyNotation: {tiny_notation}")
+        
+        # Copy ORIGINAL file to outputs as backup BEFORE modification
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"{file_path.stem}.{timestamp}.bak"
+        backup_path = out_dir / backup_filename
+        shutil.copy2(file_path, backup_path)
+        print(f"💾 Original copied to: outputs/{backup_filename}")
+        
+        # Read the original file
+        original_content = file_path.read_text()
+        
+        # Build the new content
+        new_lines = []
+        toggle_enabled = False
+        tiny_added = False
+        
+        for line in original_content.split('\n'):
+            # Enable the promotion toggle
+            if 'PROMOTE_TO_TINYNOTATION' in line and '=' in line and 'False' in line and not toggle_enabled:
+                new_lines.append('PROMOTE_TO_TINYNOTATION = True  # TinyNotation is now dominant')
+                toggle_enabled = True
+                continue
+            
+            # Add SOURCE_MELODY_TINY right after SOURCE_MELODY_LILY definition ends
+            if '""".strip()' in line and 'SOURCE_MELODY_LILY' in '\n'.join(new_lines[-10:]) and not tiny_added:
+                new_lines.append(line)
+                new_lines.append('')
+                new_lines.append('# TinyNotation equivalent (for visual comparison with LilyPond)')
+                new_lines.append('# PROMOTE_TO_TINYNOTATION toggle controls which format is dominant (gets processed)')
+                new_lines.append(f'SOURCE_MELODY_TINY = "{tiny_notation}"')
+                tiny_added = True
+                continue
+            
+            # Keep all other lines unchanged
+            new_lines.append(line)
+        
+        # Write MODIFIED content to root (replaces original)
+        new_content = '\n'.join(new_lines)
+        file_path.write_text(new_content)
+        print(f"✅ Modified file written to: {file_path.name} (root)")
+        
+        # Copy MODIFIED file to outputs for inspection
+        modified_output_path = out_dir / file_path.name
+        with open(modified_output_path, 'w') as f:
+            f.write(new_content)
+        print(f"📋 Modified file copied to: outputs/{file_path.name}")
+        
+        print(f"   - PROMOTE_TO_TINYNOTATION enabled (TinyNotation is dominant)")
+        print(f"   - SOURCE_MELODY_LILY preserved (for visual correlation)")
+        print(f"   - SOURCE_MELODY_TINY added (will be processed)")
+        print("="*60 + "\n")
+        
+        return True
+
+
+def run_pipeline_from_file(file_path_str: str):
+    """
+    Central pipeline orchestrator - the "three stations" approach.
+    
+    This function implements flexible input handling with priority order:
+    1. build_score_data() function - for programmatic composition
+    2. SOURCE_MELODY_TINY variable - for TinyNotation strings (promoted)
+    3. SOURCE_MELODY_LILY variable - for raw LilyPond strings
+    4. build_part() function - for music21.Part generation
+    
+    The result is automatically engraved to PDF/MIDI in the outputs/ directory.
+    
+    Special feature: PROMOTE_TO_TINYNOTATION toggle
+    If a study file sets PROMOTE_TO_TINYNOTATION = True, this function will:
+    - Convert SOURCE_MELODY_LILY to TinyNotation
+    - Create a backup of the original file
+    - Rewrite the file with SOURCE_MELODY_TINY
+    - Disable the promotion toggle
+    
+    Args:
+        file_path_str: Path to the study file (usually __file__ from the caller)
+    """
+    import importlib.util
+    import re
+    from pathlib import Path
+    
+    # Resolve file path
+    file_path = Path(file_path_str).resolve()
+    if not file_path.exists():
+        raise FileNotFoundError(f"Study file not found: {file_path}")
+    
+    # Derive output basename from filename (e.g., first.py → first)
+    output_basename = file_path.stem
+    
+    print(f"\n{'='*60}")
+    print(f"🎵 CODEMPOSE PIPELINE")
+    print(f"{'='*60}")
+    print(f"Study file: {file_path.name}")
+    print(f"Output: outputs/{output_basename}.*")
+    print(f"{'='*60}\n")
+    
+    # Load the study file as a Python module
+    spec = importlib.util.spec_from_file_location(file_path.stem, str(file_path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load module from {file_path}")
+    
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    
+    # Check for SHORTHAND promotion toggle FIRST
+    promote_shorthand_toggle = getattr(module, 'PROMOTE_TO_PROGRAMMATIC', False)
+    if promote_shorthand_toggle:
+        promotion_success = promote_shorthand_to_programmatic(file_path, module)
+        if promotion_success:
+            print("⚠️  File has been promoted. Please re-run to process the new programmatic code.")
+            print("="*60 + "\n")
+            return  # Exit early - user should re-run
+        else:
+            print("⚠️  Shorthand promotion failed. Continuing with normal processing...")
+            print("="*60 + "\n")
+    
+    # Check for TINYNOTATION promotion toggle SECOND
+    promote_toggle = getattr(module, 'PROMOTE_TO_TINYNOTATION', False)
+    if promote_toggle:
+        promotion_success = promote_lilypond_to_tinynotation(file_path, module)
+        if promotion_success:
+            print("⚠️  File has been promoted. Please re-run to process the new TinyNotation format.")
+            print("="*60 + "\n")
+            return  # Exit early - user should re-run
+        else:
+            print("⚠️  Promotion failed. Continuing with normal processing...")
+            print("="*60 + "\n")
+    
+    score_data = None
+    input_type = None
+    
+    # Station 1: Try build_score_data() - highest priority
+    if hasattr(module, 'build_score_data'):
+        print("📊 Found build_score_data() function")
+        input_type = "build_score_data"
+        try:
+            result = module.build_score_data()
+            # Handle case where build_score_data returns score_data dict
+            if isinstance(result, dict) and 'parts' in result:
+                score_data = result
+            # Handle case where it returns a music21.Part
+            elif hasattr(result, '__class__') and 'Part' in result.__class__.__name__:
+                print("   Converting Part to score_data...")
+                from music_data import extract_data_from_part
+                events = extract_data_from_part(result)
+                score_data = {
+                    'metadata': {'title': output_basename},
+                    'parts': {'Main': events}
+                }
+            else:
+                raise ValueError(f"build_score_data() returned unexpected type: {type(result)}")
+        except Exception as e:
+            print(f"❌ Error executing build_score_data(): {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    # Station 2: Try SOURCE_MELODY_TINY - second priority (promoted TinyNotation)
+    elif hasattr(module, 'SOURCE_MELODY_TINY'):
+        print("🎹 Found SOURCE_MELODY_TINY variable (promoted TinyNotation)")
+        input_type = "SOURCE_MELODY_TINY"
+        tiny_string = getattr(module, 'SOURCE_MELODY_TINY')
+        print(f"   TinyNotation input: {tiny_string[:60]}...")
+        
+        # Parse metadata header from TinyNotation string
+        # Format: "time=6/4 key=Cmajor tempo=90 c4 d4 e4 f4..."
+        import music21
+        import re
         from music_data import extract_data_from_part
-    except Exception:
-        raise RuntimeError('music_data.extract_data_from_part is required for compatibility wrapper')
-    sd = {'metadata': {'title': default_title}, 'parts': {}}
-    for name, part in (parts_dict or {}).items():
+        
         try:
+            # Extract metadata header (key=value pairs at the start)
+            metadata = {
+                'title': output_basename,
+                'source_format': 'TinyNotation (promoted)'
+            }
+            
+            # Pattern to match key=value pairs at the beginning
+            # Matches: time=6/4, key=Cmajor, tempo=90
+            header_pattern = r'^((?:\w+=[\w/]+\s+)*)'
+            header_match = re.match(header_pattern, tiny_string)
+            
+            notes_string = tiny_string  # Default: use whole string
+            
+            if header_match and header_match.group(1).strip():
+                header_str = header_match.group(1).strip()
+                print(f"   Detected metadata header: {header_str}")
+                
+                # Remove header from notes string
+                notes_string = tiny_string[len(header_match.group(1)):].strip()
+                
+                # Parse key=value pairs
+                for pair in header_str.split():
+                    if '=' in pair:
+                        key, value = pair.split('=', 1)
+                        
+                        if key == 'time':
+                            # time=6/4
+                            metadata['time_signature'] = value
+                        
+                        elif key == 'key':
+                            # key=Cmajor or key=Dminor
+                            # Parse to extract tonic and mode
+                            # "Cmajor" -> tonic="C", mode="major"
+                            match = re.match(r'([A-G][#b]?)(\w+)', value)
+                            if match:
+                                tonic = match.group(1).lower()  # "C" -> "c"
+                                mode = match.group(2).lower()   # "major" -> "major"
+                                metadata['key_signature'] = {
+                                    'tonic': tonic,
+                                    'mode': mode
+                                }
+                        
+                        elif key == 'tempo':
+                            # tempo=90
+                            try:
+                                bpm = int(value)
+                                metadata['tempo'] = {
+                                    'beat_duration': 4,  # Default to quarter note
+                                    'bpm': bpm
+                                }
+                            except ValueError:
+                                pass  # Ignore invalid tempo values
+            
+            # Add time signature to notes string for music21 if present
+            if 'time_signature' in metadata:
+                notes_string = f"{metadata['time_signature']} {notes_string}"
+            
+            print(f"   Notes string for music21: {notes_string[:60]}...")
+            
+            # Parse TinyNotation with music21
+            tiny_obj = music21.converter.parse(f"tinynotation: {notes_string}")
+            part = music21.stream.Part()
+            
+            # Extract notes and rests
+            for element in tiny_obj.flatten().notesAndRests:
+                part.append(element)
+            
+            # Extract time signature if present (music21 may have added it)
+            for ts in tiny_obj.flatten().getElementsByClass(music21.meter.TimeSignature):
+                if not part.getElementsByClass(music21.meter.TimeSignature):
+                    part.insert(0, ts)
+                break
+            
+            # Convert to score_data
             events = extract_data_from_part(part)
-            sd['parts'][name] = events
-        except Exception:
-            # If conversion fails for a part, skip it but continue
-            continue
-    return sd
-
-
-def engrave_with_abjad_compat(input_obj, output_filename: str, **kwargs):
-    """Compatibility entry point.
-
-    Accepts either the new `score_data` dict (with keys 'metadata' and
-    'parts') or the older mapping name->music21.Part. Delegates to the
-    decoupled `engrave_with_abjad(score_data, output_filename)` function.
-    """
-    # If caller passed the new score_data dict, detect and use it directly
-    if isinstance(input_obj, dict) and 'parts' in input_obj:
-        return engrave_with_abjad(input_obj, output_filename)
-
-    # Otherwise assume it's the legacy mapping of name->music21.Part
-    try:
-        sd = _score_data_from_parts_dict(input_obj, default_title=output_filename)
-    except Exception as e:
-        print(f"[error] compatibility conversion failed: {e}")
-        raise
-    return engrave_with_abjad(sd, output_filename)
-
-
-# Keep the new name as the preferred API, but export the compatibility
-# alias so older callsites can use it explicitly if needed.
-engrave_with_abjad_from_parts = engrave_with_abjad_compat
-
-if __name__ == "__main__":
-    melody_snippet = r"\relative c' { e4 f g a <c e g>2. r4 }"
-    harmony_snippet = "c,2 g,2 <c e g>1"
+            score_data = {
+                'metadata': metadata,
+                'parts': {'Melody': events}
+            }
+            
+        except Exception as e:
+            print(f"❌ Error parsing SOURCE_MELODY_TINY: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
-    print("--- Parsing music from LilyPond strings ---")
-    melody = parse_lilypond_snippet(melody_snippet)
-    harmony = parse_lilypond_snippet(harmony_snippet)
-
-    print("\n--- Transforming with music21 ---")
-    melody_t = melody.transpose("P5")
-    print(f"Original melody start: {melody.notes[0].pitch.nameWithOctave}")
-    print(f"Transposed melody start: {melody_t.notes[0].pitch.nameWithOctave}")
-    print("\nOriginal melody contents:")
-    melody.show('text')
-    print("\nTransposed melody contents:")
-    melody_t.show('text')
-
-    print("\n--- Engraving with Abjad ---")
-    engrave_with_abjad({"Melody": melody_t, "Harmony": harmony}, "relative_score")
-    print("\n✅ Done.")
+    # Station 3: Try SOURCE_MELODY_LILY - third priority
+    elif hasattr(module, 'SOURCE_MELODY_LILY'):
+        print("📝 Found SOURCE_MELODY_LILY variable")
+        input_type = "SOURCE_MELODY_LILY"
+        lily_string = getattr(module, 'SOURCE_MELODY_LILY')
+        print(f"   LilyPond input: {lily_string[:60]}...")
+        
+        # Use the integrated parser
+        from lilypond_parser import parse_lilypond_to_data
+        try:
+            score_data = parse_lilypond_to_data(lily_string, part_name='Melody')
+            # Update title if not set
+            if 'metadata' not in score_data:
+                score_data['metadata'] = {}
+            if 'title' not in score_data['metadata']:
+                score_data['metadata']['title'] = output_basename
+        except Exception as e:
+            print(f"❌ Error parsing SOURCE_MELODY_LILY: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    # Station 4: Try build_part() - fourth priority
+    elif hasattr(module, 'build_part'):
+        print("🎼 Found build_part() function")
+        input_type = "build_part"
+        try:
+            part = module.build_part()
+            print("   Converting Part to score_data...")
+            from music_data import extract_data_from_part
+            events = extract_data_from_part(part)
+            score_data = {
+                'metadata': {'title': output_basename},
+                'parts': {'Main': events}
+            }
+        except Exception as e:
+            print(f"❌ Error executing build_part(): {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    # No valid entry point found
+    else:
+        raise AttributeError(
+            f"Study file {file_path.name} must contain one of:\n"
+            f"  1. build_score_data() function (highest priority)\n"
+            f"  2. SOURCE_MELODY_TINY variable (promoted TinyNotation)\n"
+            f"  3. SOURCE_MELODY_LILY variable (raw LilyPond)\n"
+            f"  4. build_part() function\n\n"
+            f"Tip: Set PROMOTE_TO_TINYNOTATION = True to auto-convert LilyPond to TinyNotation"
+        )
+    
+    # Display what we found
+    print(f"✅ Successfully loaded via: {input_type}")
+    print(f"   Metadata: {score_data.get('metadata', {})}")
+    print(f"   Parts: {list(score_data.get('parts', {}).keys())}")
+    
+    # Show warnings if any
+    warnings = score_data.get('metadata', {}).get('warnings', [])
+    if warnings:
+        print(f"\n⚠️  Parser warnings:")
+        for w in warnings:
+            print(f"   - {w}")
+    
+    print()
+    
+    # Station 4: Engrave (pass source file for copying to outputs)
+    engrave_with_abjad(score_data, output_basename, source_file=str(file_path))
+    
+    # Station 5: Export to MusicXML for MuseScore
+    print()
+    export_to_musicxml(score_data, output_basename)
+    
+    print(f"\n{'='*60}")
+    print(f"✅ PIPELINE COMPLETE")
+    print(f"{'='*60}")
+    print(f"Generated files:")
+    print(f"  • outputs/{output_basename}.ly        (LilyPond source)")
+    print(f"  • outputs/{output_basename}.pdf       (Musical score)")
+    print(f"  • outputs/{output_basename}.midi      (Audio playback)")
+    print(f"  • outputs/{output_basename}.musicxml  (MuseScore import)")
+    print(f"{'='*60}\n")

@@ -1,0 +1,89 @@
+# project_template.py
+
+import music21
+import abjad
+from pathlib import Path
+import subprocess
+import re
+from fractions import Fraction
+
+def _parse_token(tok: str):
+    if tok.lower().startswith('r'):
+        m = re.match(r"r(\d+\.?)", tok, re.IGNORECASE)
+        dur_token = m.group(1) if m else '4'
+        ql = 4.0 / float(dur_token.replace('.', ''))
+        if '.' in dur_token: ql *= 1.5
+        return music21.note.Rest(quarterLength=ql)
+
+    m = re.match(r"(?P<step>[a-g])(?P<acc>(?:is|es|s|b|#)?)(?P<oct>[,']*)(?P<dur>\d+\.?)?", tok, flags=re.IGNORECASE)
+    if not m: return None
+    
+    data = m.groupdict()
+    p = music21.pitch.Pitch(data['step'])
+    acc_str = (data['acc'] or '').lower()
+    if 'is' in acc_str or '#' in acc_str: p.accidental = '#'
+    if 'es' in acc_str or 's' in acc_str: p.accidental = 'b'
+    if 'b' in acc_str: p.accidental = 'b'
+    
+    p.octave = 4 + (data['oct'] or '').count("'") - (data['oct'] or '').count(",")
+    dur_token = data['dur'] or '4'
+    ql = 4.0 / float(dur_token.replace('.', ''))
+    if '.' in dur_token: ql *= 1.5
+    return music21.note.Note(p, quarterLength=ql)
+
+def _resolve_relative(tok: str, last_pitch: music21.pitch.Pitch):
+    element = _parse_token(tok)
+    if not isinstance(element, music21.note.Note) or "'" in tok or "," in tok:
+        return element
+    element.pitch.octave = last_pitch.octave
+    interval = music21.interval.Interval(last_pitch, element.pitch)
+    if interval.direction == music21.interval.Direction.ASCENDING and interval.semitones > 6:
+        element.pitch.octave -= 1
+    elif interval.direction == music21.interval.Direction.DESCENDING and interval.semitones < -6:
+        element.pitch.octave += 1
+    return element
+    
+def parse_lilypond_snippet(snippet: str) -> music21.stream.Part:
+    part = music21.stream.Part()
+    relative_match = re.match(r"\\relative\s+([a-g][^ ]*)?\s*\{(.*)\}", snippet, re.DOTALL | re.IGNORECASE)
+    if not relative_match: raise ValueError("Parser requires a \\relative block.")
+    base_note_str, body = relative_match.groups()
+    body = re.sub(r"\\(time|key|major|minor|tempo)\s+[^|\s}]+", "", body, re.IGNORECASE)
+    body = body.replace("bmol", "b").replace("f#", "fis")
+    tokens = [tok for tok in body.split() if tok != '|']
+    last_note = _parse_token(base_note_str)
+    if not isinstance(last_note, music21.note.Note): raise ValueError(f"Invalid base note: {base_note_str}")
+    last_pitch = last_note.pitch
+    for tok in tokens:
+        element = _resolve_relative(tok, last_pitch)
+        if element:
+            part.append(element)
+            if isinstance(element, music21.note.Note): last_pitch = element.pitch
+    return part
+
+def engrave_with_abjad(score_data: dict, output_basename: str):
+    print(f"🎶 Engraving '{score_data.get('metadata', {}).get('title', '')}'...")
+    out_dir = Path('outputs'); out_dir.mkdir(parents=True, exist_ok=True)
+    ly_path = out_dir / f"{output_basename}.ly"
+    title = score_data.get('metadata', {}).get('title', output_basename)
+    original_snippet = score_data.get('metadata', {}).get('original_input', '')
+
+    staves = []
+    for part_name, events in sorted(score_data.get('parts', {}).items()):
+        if part_name == 'Melody' and '\\relative' in original_snippet:
+            body = original_snippet
+        else:
+            part_tokens = [abjad.lilypond(event, "abjad") for event in music21.converter.thaw(events)]
+            body = " ".join(part_tokens)
+        clef = "bass" if "harmony" in part_name.lower() else "treble"
+        staves.append(f"\\new Staff {{\n  \\clef {clef}\n  {body}\n}}")
+    score_block = f"<<\n{''.join(staves)}\n>>" if len(staves) > 1 else staves[0]
+
+    ly_content = f'\\version "2.24.1"\n\\header {{ title = "{title}" }}\n\\score {{\n  {score_block}\n  \\layout {{ }}\n  \\midi {{ }}\n}}'
+    ly_path.write_text(ly_content)
+    print(f"Wrote LilyPond file: {ly_path}")
+    try:
+        subprocess.run(["lilypond", str(ly_path.name)], cwd=str(out_dir), capture_output=True, text=True, check=True)
+        print(f"✅ Successfully compiled {output_basename}.pdf and .midi")
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"⚠️ Could not compile with LilyPond. Error:\n{getattr(e, 'stderr', e)}")

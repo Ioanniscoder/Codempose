@@ -52,3 +52,63 @@ This will create `my_score.ly` and `my_score.pdf` (via Abjad/LilyPond) and can b
 
 - The Dockerfile now installs `git-lfs` so pushes from within Codespaces will work for repositories that use LFS. If you still push from a local machine, ensure `git-lfs` is installed there as well.
 - A GitHub Actions workflow `devcontainer-ci.yml` was added to build the devcontainer image and run the demo (`project_template.py`) on pull requests. The generated `relative_score.pdf` is uploaded as a workflow artifact for inspection.
+
+## Canonical project file
+
+`projectfile.md` is now the canonical project file for objectives, status and TODOs.
+See `projectfile.md` in the repository root for the full project definition and the
+study-file contract. `DEVELOPMENT.md` continues to include run/debug instructions and
+the devcontainer notes.
+
+## DEVELOPMENT file standard (project contract setting)
+
+This repository treats `DEVELOPMENT.md` as the authoritative development-run
+document and a project-level contract for contributors. The document must follow
+this minimal standard so automated checks, contributors, and the template code
+can rely on a stable structure.
+
+Required contents
+- Header: a short one-line title and a `DEVELOPMENT version: vX.Y` line near the top
+	so tooling and reviewers can detect whether the document format changed.
+- Run & devcontainer instructions: concise step-by-step instructions for
+	starting the example script(s) and rebuilding the devcontainer, if applicable.
+- Canonical pointer: a clear statement pointing to `projectfile.md` as the
+	canonical projectfile for goals/status/TODOs.
+- Contract summary: a short, explicit statement of the study-file vs template
+	contract (where parsing/engraving live) and where to put musical inputs.
+- Changelog entry for edits: when this file is modified, include a short
+	changelog entry at the end of the file with the date, author, and a one-line
+	summary of the change.
+
+Edit process (how to change the contract)
+- Small edits that do not change the contract (typos, clarifications) may be
+	made directly on a branch and merged via PR following normal review.
+- Any change that expands, reduces, or otherwise modifies the study-file
+	contract MUST also update `projectfile.md`. The PR must include a short
+	rationale and an entry in this file's changelog section.
+
+Automation and enforcement
+- Repositories depending on a strict workflow should add a small GitHub Actions
+	check that validates the presence of the required header and the canonical
+	pointer. If you want, I can add a simple Action that checks `DEVELOPMENT.md`
+	for the `DEVELOPMENT version:` line and rejects PRs that update the contract
+	without a matching `projectfile.md` update.
+
+Minimal example header (copy into `DEVELOPMENT.md`):
+
+````
+# Development & run instructions
+
+DEVELOPMENT version: v1.0 — 2025-09-24
+
+...existing content...
+````
+
+Location and intent
+- Keep this file in the repository root. It is intended for maintainers and
+	future contributors to understand how to run the example, what the project
+	contract is, and how to change it safely.
+
+By placing this standard inside `DEVELOPMENT.md` we make the contract explicit
+and discoverable. Follow the edit process above when you need to change the
+contract or its wording.

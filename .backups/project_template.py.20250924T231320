@@ -954,8 +954,15 @@ def engrave_with_abjad(parts: dict, output_file: str, prune_other: bool = False,
         for _l in manual_lines:
             if not isinstance(_l, str):
                 _l = str(_l)
-            # keep common whitespace and printable bytes; drop other controls
-            _l = _re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", _l)
+            # Detect control characters; rather than silently deleting them
+            # (which can truncate sequences like "\version" if a control
+            # byte is present), replace them with visible escape markers
+            # (e.g. '\\x0b') and warn so the user can inspect the source.
+            if _re.search(r"[\x00-\x1f]", _l):
+                def _esc_ctrl(m):
+                    return '\\x%02x' % ord(m.group(0))
+                _l = _re.sub(r"[\x00-\x1f]", _esc_ctrl, _l)
+                print(f"[warning] control characters replaced with escape sequences in Lily line: {repr(_l)[:200]}")
             cleaned.append(_l)
         ly_text = "\n".join(cleaned) + "\n"
         ly_path.write_text(ly_text)

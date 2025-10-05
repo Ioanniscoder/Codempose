@@ -1,0 +1,86 @@
+"""
+Test file for shorthand to programmatic promotion.
+
+This demonstrates the PROMOTE_TO_PROGRAMMATIC toggle workflow.
+"""
+
+from lilypond_parser import parse_lilypond_to_data
+from composition_shorthand import build_score_from_assignments, validate_voice_assignments
+
+# Toggle for programmatic dominance (set True to generate programmatic code)
+PROMOTE_TO_PROGRAMMATIC = True  # Set to True to trigger promotion
+
+# ============================================================================
+# MUSICAL SNIPPETS
+# ============================================================================
+
+THEME_LILY = r"""
+\relative c' {
+    c4 d e f |
+    g2 e2 |
+}
+"""
+
+VARIATION_LILY = r"""
+\relative c' {
+    e4 f g a |
+    b2 g2 |
+}
+"""
+
+BASS_LILY = r"""
+\relative c {
+    c2 g2 |
+    f2 c2 |
+}
+"""
+
+# ============================================================================
+# VOICE ASSIGNMENTS (Shorthand)
+# ============================================================================
+
+VOICE_ASSIGNMENTS = {
+    'Melody': {
+        'Soprano': 'THEME + transpose(THEME, 7)',
+        'Alto': 'VARIATION + retrograde(VARIATION)',
+    },
+    'Harmony': {
+        'Bass': 'BASS * 4',
+    }
+}
+
+# ============================================================================
+# BUILD FUNCTION
+# ============================================================================
+
+def build_score_data():
+    """Build score from VOICE_ASSIGNMENTS shorthand."""
+    
+    # Parse snippets
+    theme_data = parse_lilypond_to_data(THEME_LILY, part_name='Theme')
+    variation_data = parse_lilypond_to_data(VARIATION_LILY, part_name='Variation')
+    bass_data = parse_lilypond_to_data(BASS_LILY, part_name='Bass')
+    
+    # Build voice lookup
+    voice_lookup = {
+        'THEME': theme_data['parts']['Theme'],
+        'VARIATION': variation_data['parts']['Variation'],
+        'BASS': bass_data['parts']['Bass'],
+    }
+    
+    # Validate
+    errors = validate_voice_assignments(VOICE_ASSIGNMENTS, voice_lookup.keys())
+    if errors:
+        raise ValueError(f"Voice assignment errors: {errors}")
+    
+    # Build from shorthand
+    return build_score_from_assignments(
+        voice_assignments=VOICE_ASSIGNMENTS,
+        voice_data=voice_lookup,
+        metadata={'title': 'Test Promotion'}
+    )
+
+
+if __name__ == '__main__':
+    from project_template import run_pipeline_from_file
+    run_pipeline_from_file(__file__)

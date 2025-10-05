@@ -1,0 +1,17 @@
+# music_data.py
+
+import music21
+
+def extract_data_from_part(part: music21.stream.Part):
+    """Converts a music21.Part into a list of canonical event dictionaries."""
+    # This uses music21's built-in serialization format for simplicity
+    return music21.converter.freeze(part.flatten().notesAndRests, fmt='json')
+
+def data_to_part(events: list, metadata: dict = None) -> music21.stream.Part:
+    """Converts a list of canonical event dictionaries back into a music21.Part."""
+    # This uses music21's built-in deserialization for simplicity
+    stream = music21.converter.thaw(events, fmt='json')
+    part = music21.stream.Part()
+    for el in stream:
+        part.append(el)
+    return part

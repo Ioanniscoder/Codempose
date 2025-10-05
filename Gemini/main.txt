@@ -1,0 +1,42 @@
+# main.py
+
+from pathlib import Path
+import argparse
+import importlib.util
+import project_template as pt
+
+def load_and_build_score_data(path: Path):
+    """
+    Loads a study file and builds score_data.
+    It calls a `build_score_data()` function in the study file.
+    """
+    if not path.exists():
+        raise FileNotFoundError(str(path))
+
+    spec = importlib.util.spec_from_file_location(path.stem, str(path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    if hasattr(mod, 'build_score_data'):
+        print(f"Found `build_score_data` in {path.name}, executing...")
+        return mod.build_score_data()
+    else:
+        raise AttributeError(f"Input file {path.name} must contain a `build_score_data` function.")
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Run the music engraving pipeline.')
+    parser.add_argument('input_file', help='Path to a study file (e.g., first.py)')
+    parser.add_argument('--output', '-o', help='Output basename (defaults to input file stem)')
+    args = parser.parse_args(argv)
+
+    p = Path(args.input_file)
+
+    # Station A & B Combined: Load the study file and let it build the score_data.
+    score_data = load_and_build_score_data(p)
+
+    # Station C: Engrave the final score_data.
+    out_basename = args.output if args.output else p.stem
+    pt.engrave_with_abjad(score_data, out_basename)
+
+if __name__ == '__main__':
+    main()

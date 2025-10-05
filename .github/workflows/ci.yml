@@ -34,3 +34,32 @@ jobs:
         with:
           name: outputs
           path: outputs
+
+  integration:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install system deps (LilyPond)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lilypond
+      - name: Install Python dependencies
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run integration smoke (generate PDF/MIDI)
+        run: |
+          . .venv/bin/activate
+          python main.py --input first.py --force-verbatim
+      - name: Upload integration outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-outputs
+          path: outputs

@@ -1,0 +1,297 @@
+# Test Cases for LilyPond → TinyNotation Conversion
+
+## Basic Note Tests
+
+### Test 1: Simple ascending scale
+**Input:**
+```
+\relative c' { c4 d e f g a b c }
+```
+**Expected Output:**
+```
+4/4 C4 D4 E4 F4 G4 A4 B4 C5
+```
+**Notes:** Basic relative mode, all steps, ends octave higher
+
+### Test 2: Single note
+**Input:**
+```
+\relative c' { c4 }
+```
+**Expected Output:**
+```
+4/4 C4
+```
+
+### Test 3: All same pitch
+**Input:**
+```
+\relative c' { c4 c c c }
+```
+**Expected Output:**
+```
+4/4 C4 C4 C4 C4
+```
+
+---
+
+## Octave Marker Tests
+
+### Test 4: Explicit octave up
+**Input:**
+```
+\relative c' { c4 d'4 e, f }
+```
+**Expected Output:**
+```
+4/4 C4 D5 E4 F4
+```
+**Notes:** d' forces octave 5, e, forces back to octave 4
+
+### Test 5: Multiple octave markers
+**Input:**
+```
+\relative c' { c4 c'' c,, c }
+```
+**Expected Output:**
+```
+4/4 C4 C6 C2 C2
+```
+
+### Test 6: Large leap without marker (relative nearest)
+**Input:**
+```
+\relative c' { c4 b f }
+```
+**Expected Output:**
+```
+4/4 C4 B3 F4
+```
+**Notes:** b goes down to B3 (nearest), f goes up to F4 (nearest to B3)
+
+---
+
+## Accidental Tests
+
+### Test 7: Sharp notation (is)
+**Input:**
+```
+\relative c' { fis4 cis gis }
+```
+**Expected Output:**
+```
+4/4 F#4 C#4 G#4
+```
+
+### Test 8: Sharp notation (#)
+**Input:**
+```
+\relative c' { f#4 c# g# }
+```
+**Expected Output:**
+```
+4/4 F#4 C#4 G#4
+```
+
+### Test 9: Flat notation (es)
+**Input:**
+```
+\relative c' { bes4 es aes }
+```
+**Expected Output:**
+```
+4/4 Bb4 Eb4 Ab4
+```
+
+### Test 10: Localized flat (bmol/bemol)
+**Input:**
+```
+\relative c' { bmol4 ebemol }
+```
+**Expected Output:**
+```
+4/4 Bb4 Eb4
+```
+**Warnings:** Should flag localized accidentals
+
+---
+
+## Duration Tests
+
+### Test 11: Mixed durations
+**Input:**
+```
+\relative c' { c2 d4 e8 f16 }
+```
+**Expected Output:**
+```
+4/4 C2 D4 E8 F16
+```
+
+### Test 12: Dotted notes
+**Input:**
+```
+\relative c' { c2. d4 }
+```
+**Expected Output:**
+```
+4/4 C2. D4
+```
+
+### Test 13: All whole notes
+**Input:**
+```
+\relative c' { c1 d1 }
+```
+**Expected Output:**
+```
+4/4 C1 D1
+```
+
+---
+
+## Rest Tests
+
+### Test 14: Rests in sequence
+**Input:**
+```
+\relative c' { c4 r4 e4 r4 }
+```
+**Expected Output:**
+```
+4/4 C4 r4 E4 r4
+```
+
+### Test 15: Different rest durations
+**Input:**
+```
+\relative c' { r2 c4 r8 c8 }
+```
+**Expected Output:**
+```
+4/4 r2 C4 r8 C8
+```
+
+---
+
+## Time Signature Tests
+
+### Test 16: 6/4 time
+**Input:**
+```
+\relative c' { \time 6/4 c2 d4 e2 f4 }
+```
+**Expected Output:**
+```
+6/4 C2 D4 E2 F4
+```
+
+### Test 17: 3/4 time
+**Input:**
+```
+\relative c' { \time 3/4 c4 d e }
+```
+**Expected Output:**
+```
+3/4 C4 D4 E4
+```
+
+### Test 18: 6/8 time
+**Input:**
+```
+\relative c' { \time 6/8 c8 d e f g a }
+```
+**Expected Output:**
+```
+6/8 C8 D8 E8 F8 G8 A8
+```
+
+---
+
+## Complex Real-World Tests
+
+### Test 19: Full example from project
+**Input:**
+```
+\relative e { \time 6/4 \key c \major \tempo 4=90 e2 bmol4 c2 r4 | e2 f#4 e2 r4 }
+```
+**Expected Output:**
+```
+6/4 E2 Bb4 C2 r4 E2 F#4 E2 r4
+```
+**Warnings:** Should flag 'bmol' as localized accidental
+
+### Test 20: Accidentals with octave markers
+**Input:**
+```
+\relative c'' { c4 bes, a' gis, }
+```
+**Expected Output:**
+```
+4/4 C5 Bb4 A5 G#4
+```
+
+### Test 21: Mixed sharps and flats
+**Input:**
+```
+\relative c' { fis4 bes cis aes }
+```
+**Expected Output:**
+```
+4/4 F#4 Bb4 C#4 Ab4
+```
+
+---
+
+## Edge Cases
+
+### Test 22: Empty input
+**Input:**
+```
+\relative c' { }
+```
+**Expected Output:**
+```
+4/4
+```
+**Notes:** Empty is valid
+
+### Test 23: Only rests
+**Input:**
+```
+\relative c' { r4 r4 r2 }
+```
+**Expected Output:**
+```
+4/4 r4 r4 r2
+```
+
+### Test 24: Large leap that should trigger warning
+**Input:**
+```
+\relative c' { c4 c''' }
+```
+**Expected Output:**
+```
+4/4 C4 C7
+```
+**Warnings:** Should flag large leap (3 octaves = 36 semitones)
+
+---
+
+## Expected Warning Scenarios
+
+1. **Localized accidentals**: `bmol`, `bemol` → Should suggest using `bes` or `b-`
+2. **Large leaps**: Any interval > 6 semitones without explicit octave marker
+3. **Ambiguous octave**: (if implemented) tokens without clear octave context
+4. **Missing time signature**: Should default to 4/4 with warning
+5. **Unsupported syntax**: Any token that can't be parsed
+
+---
+
+## Notes for Implementation
+
+- All tests should verify both `result.tiny_notation` AND `result.warnings`
+- Test `result.flagged_tokens()` for expected warnings
+- Test `result.format_review()` output for human-readable diagnostics
+- Some tests intentionally trigger warnings to verify warning detection

@@ -1,0 +1,19 @@
+"""Test promotion feature: LilyPond to TinyNotation"""
+
+# Enable promotion toggle
+PROMOTE_TO_TINYNOTATION = True
+
+# Primary LilyPond snippet that will be promoted
+SOURCE_MELODY_LILY = r"\relative c' { \time 4/4 c4 d e f | g a b c }"
+
+# When you run this file, it will:
+# 1. Convert SOURCE_MELODY_LILY to TinyNotation
+# 2. Create a backup (.bak file)
+# 3. Rewrite this file with SOURCE_MELODY_TINY
+# 4. Disable the PROMOTE_TO_TINYNOTATION toggle
+
+if __name__ == '__main__':
+    import sys
+    sys.path.insert(0, '/workspaces/Codempose')
+    from project_template import run_pipeline_from_file
+    run_pipeline_from_file(__file__)

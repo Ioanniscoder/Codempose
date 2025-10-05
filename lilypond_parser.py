@@ -1,261 +1,185 @@
 import re
 import music21
 from music_data import extract_data_from_part
+from lily_to_tiny import lily_to_tiny_notation
+
+
+def _parse_tiny_pitch(pitch_str: str) -> music21.pitch.Pitch:
+    """
+    Parse a TinyNotation pitch string into a music21.Pitch object.
+    
+    Examples: 'c', 'f#', "g'", 'b-', "c,,"
+    """
+    # Pattern: letter + optional accidental + optional octave markers
+    match = re.match(r"([a-g])([#\-]*)([',]*)", pitch_str.lower())
+    if not match:
+        raise ValueError(f"Cannot parse pitch: {pitch_str}")
+    
+    step = match.group(1).upper()
+    accidentals = match.group(2)
+    octave_marks = match.group(3)
+    
+    # Calculate octave (base = 4 for TinyNotation)
+    octave = 4 + octave_marks.count("'") - octave_marks.count(",")
+    
+    # Create pitch
+    pitch = music21.pitch.Pitch(step)
+    pitch.octave = octave
+    
+    # Apply accidentals
+    if '#' in accidentals:
+        pitch.accidental = music21.pitch.Accidental('sharp')
+    elif '-' in accidentals:
+        pitch.accidental = music21.pitch.Accidental('flat')
+    
+    return pitch
+
+
+def _parse_tiny_duration(dur_str: str) -> float:
+    """
+    Parse a TinyNotation duration string into quarter lengths.
+    
+    Examples: '4' → 1.0, '2' → 2.0, '8' → 0.5, '4.' → 1.5
+    """
+    if not dur_str:
+        return 1.0  # Default quarter note
+    
+    # Check for dots
+    has_dot = '.' in dur_str
+    base_dur = dur_str.replace('.', '')
+    
+    if not base_dur.isdigit():
+        return 1.0  # Default
+    
+    # Quarter length = 4.0 / duration_number
+    ql = 4.0 / float(base_dur)
+    
+    # Dotted durations are 1.5x base
+    if has_dot:
+        ql *= 1.5
+    
+    return ql
+
 
 def parse_lilypond_to_data(lily_string: str, part_name: str = "Part 1") -> dict:
     """
     Parses a LilyPond shorthand string into the standard data dictionary.
     Returns a dict: {"metadata": {...}, "parts": { part_name: [events...] }}
+    
+    Now uses the validated lily_to_tiny_notation() parser with correct
+    relative octave logic (alphabetical tie-breaking, not shortest diatonic path).
     """
     # Basic sanitization (strip control chars that break tokenization)
     if lily_string is None:
         lily_string = ''
     lily_string = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]+", '', lily_string)
 
-    # Collect warnings and suggestions during parsing so callers can
-    # inspect issues and present actionable advice. Keep parser behavior
-    # unchanged; we only surface diagnostics.
-    parse_warnings = []
-    parse_suggestions = []
-
-    # Parse the lily snippet into a music21 Part using a simplified internal
-    # parser (keeps relative-pitch semantics). For complex needs, extend
-    # this function to call the older robust tokenizer/resolver.
-    part = _parse_lilypond_snippet_to_part(lily_string, parse_warnings, parse_suggestions)
-    # Attach warnings to the part so downstream code can access them
+    # Use the new validated parser
+    parse_result = lily_to_tiny_notation(lily_string)
+    
+    # Handle errors
+    if not parse_result.success:
+        raise ValueError(f"Parser error: {parse_result.error}")
+    
+    # Parse the complete TinyNotation string using music21
+    # This is more reliable than parsing individual tokens
+    part = music21.stream.Part()
+    
     try:
-        if parse_warnings:
-            part._parse_warnings = parse_warnings
-    except Exception:
-        pass
+        # Use the complete TinyNotation string from the parser
+        tiny_string = parse_result.tiny_notation
+        
+        # Parse with music21's TinyNotation parser
+        tiny_obj = music21.converter.parse(f"tinynotation: {tiny_string}")
+        
+        # Extract notes and rests
+        for element in tiny_obj.flatten().notesAndRests:
+            part.append(element)
+        
+        # Add time signature if present (music21 may have already added it, but ensure it's at position 0)
+        if 'time' in parse_result.directives:
+            ts_str = parse_result.directives['time']
+            numerator, denominator = map(int, ts_str.split('/'))
+            ts = music21.meter.TimeSignature(f"{numerator}/{denominator}")
+            # Remove any existing time signatures
+            for existing_ts in part.getElementsByClass(music21.meter.TimeSignature):
+                part.remove(existing_ts)
+            part.insert(0, ts)
+            
+    except Exception as e:
+        raise ValueError(f"Failed to build music21 Part from tokens: {e}")
 
-    # Extract metadata
+    # Extract metadata - start with defaults
     metadata = {"title": "LilyPond Score", "composer": "Codempose"}
+    
+    # Extract from directives dictionary (not list)
+    if parse_result.directives:
+        # Time signature
+        if 'time' in parse_result.directives:
+            metadata["time_signature"] = parse_result.directives['time']
+        
+        # Key signature: parse "c \\major" or "d \\minor"
+        if 'key' in parse_result.directives:
+            key_str = parse_result.directives['key']
+            # Format is "c \\major" or "d \\minor"
+            match = re.match(r'([a-g](?:es|is)?)\s+\\(major|minor)', key_str)
+            if match:
+                tonic = match.group(1)
+                mode = match.group(2)
+                metadata["key_signature"] = {"tonic": tonic, "mode": mode}
+        
+        # Tempo: parse "4 = 120" format
+        if 'tempo' in parse_result.directives:
+            tempo_str = parse_result.directives['tempo']
+            # Format is "4 = 120" or similar
+            match = re.match(r'(\d+)\s*=\s*(\d+)', tempo_str)
+            if match:
+                beat_duration = int(match.group(1))
+                bpm = int(match.group(2))
+                metadata["tempo"] = {
+                    "beat_duration": beat_duration,
+                    "bpm": bpm
+                }
+    
+    # Also check music21 Part for metadata (fallback)
     ts = part.getElementsByClass(music21.meter.TimeSignature)
-    if ts:
+    if ts and "time_signature" not in metadata:
         metadata["time_signature"] = ts[0].ratioString
     ks = part.getElementsByClass(music21.key.Key)
-    if ks:
+    if ks and "key_signature" not in metadata:
         k = ks[0]
-        metadata["key_signature"] = {"tonic": getattr(k, 'tonic', getattr(k, 'tonicPitch', 'C')).name, "mode": getattr(k, 'mode', 'major')}
+        metadata["key_signature"] = {
+            "tonic": getattr(k.tonic if hasattr(k, 'tonic') else k.tonicPitch, 'name', 'C'),
+            "mode": getattr(k, 'mode', 'major')
+        }
     tm = part.getElementsByClass(music21.tempo.MetronomeMark)
-    if tm:
-        metadata["tempo"] = int(getattr(tm[0], 'number', 0))
+    if tm and "tempo" not in metadata:
+        metadata["tempo"] = int(getattr(tm[0], 'number', 120))
 
-    # Convert the music21 Part to the canonical event list. Provide the
-    # original tokens list (if available) so the extractor can flag
-    # large relative leaps when tokens lack explicit octave markers.
-    original_tokens = getattr(part, '_original_tokens', None)
-    events = extract_data_from_part(part, original_tokens)
+    # Convert the music21 Part to the canonical event list
+    # Pass TokenInfo data for event-level tracking (direct parsing only)
+    events = extract_data_from_part(part, token_infos=parse_result.tokens)
 
-    # Attach any parsing warnings to the metadata so the engraver can
-    # include them in audit headers and provide suggestions.
-    if parse_warnings:
-        metadata['warnings'] = parse_warnings
-    if parse_suggestions:
-        metadata['suggestions'] = parse_suggestions
-
+    # Attach any parsing warnings to the metadata
+    if parse_result.warnings:
+        metadata['warnings'] = parse_result.warnings
+    
+    # Also store the full token tracking data in metadata for reference
+    if parse_result.tokens:
+        metadata['parser_tokens'] = [
+            {
+                'original': t.original,
+                'converted': t.converted,
+                'position': t.position,
+                'warnings': t.warnings
+            }
+            for t in parse_result.tokens
+        ]
+    
+    # Store original input for potential re-use
+    metadata['original_input'] = lily_string
+    
     score_data = {"metadata": metadata, "parts": {part_name: events}}
     return score_data
 
-
-def _parse_lilypond_snippet_to_part(snippet: str, warnings: list = None, suggestions: list = None) -> music21.stream.Part:
-    """A small, robust parser that preserves \relative semantics and
-    returns a music21.stream.Part. This intentionally keeps the parser
-    simple; you can swap in the older, fuller tokenizer if needed.
-    """
-    part = music21.stream.Part()
-
-    # Extract simple directives
-    time_match = re.search(r"\\time\s+(\d+/\d+)", snippet)
-    if time_match:
-        part.append(music21.meter.TimeSignature(time_match.group(1)))
-
-    key_match = re.search(r"\\key\s+([A-Ga-g][#b]?)[^\n]*?(major|minor)?", snippet, re.IGNORECASE)
-    if key_match:
-        tonic = key_match.group(1)
-        mode = key_match.group(2) or 'major'
-        try:
-            part.append(music21.key.Key(tonic, mode))
-        except Exception:
-            pass
-
-    tempo_match = re.search(r"\\tempo\s+[^=]*=(\d+)", snippet)
-    if tempo_match:
-        try:
-            part.append(music21.tempo.MetronomeMark(number=int(tempo_match.group(1))))
-        except Exception:
-            pass
-
-    # Find the main relative block and tokens (very permissive here)
-    m = re.search(r"\\relative\s+([a-g][,']*)?\s*\{([\s\S]+)\}", snippet, re.IGNORECASE)
-    if not m:
-        raise ValueError("Snippet must be in \\relative c' { ... } format")
-
-    start_note_tok, body = m.groups()
-    # Determine starting pitch
-    if start_note_tok:
-        try:
-            # use tinyNotation to get a starting pitch robustly
-            tn = f"tinynotation: {start_note_tok}4"
-            start_part = music21.converter.parse(tn)
-            last_pitch = start_part.notes[0].pitch
-        except Exception:
-            last_pitch = music21.pitch.Pitch('C4')
-    else:
-        last_pitch = music21.pitch.Pitch('C4')
-    # Preserve the octave as parsed by tinyNotation for the \relative base.
-    # Avoid forcing an arbitrary octave nudge here; let subsequent
-    # relative-resolution follow LilyPond-like nearest-octave rules.
-
-    # Tokenize chord bodies and notes/rests (supports localized accidentals like 'mol'/'bemol')
-    # Require at least one digit when a duration is present to avoid accidentally
-    # matching a note token without its intended duration (which caused many
-    # notes to default to quarterLength=1.0).
-    tokens = re.findall(r"<[^>]+>[,']*\d+\.?|[a-gr](?:is|es|mol|bemol|#|b|\u266f|\u266d)?[,']*\d+\.?|r\d+\.?", body, re.IGNORECASE)
-    # store original tokens on the part for downstream consumers
-    try:
-        part._original_tokens = [t.strip() for t in tokens]
-    except Exception:
-        pass
-
-    for token in tokens:
-        element = None
-        token = token.strip()
-        if token.startswith('<'):
-            # chord
-            notes_in_chord = re.findall(r"[a-gr](?:is|es|#|b)?[,']*", token, re.IGNORECASE)
-            dur_m = re.search(r"(\d+\.?)(?![^{]*})", token)
-            ql = 1.0
-            if dur_m:
-                d = dur_m.group(1)
-                ql = 4.0 / float(d.replace('.', ''))
-                if '.' in d: ql *= 1.5
-            chord_pitches = []
-            temp_last = last_pitch
-            for nt in notes_in_chord:
-                p = _resolve_relative_pitch(nt, temp_last, warnings, suggestions)
-                chord_pitches.append(p)
-                temp_last = p
-            element = music21.chord.Chord(chord_pitches, quarterLength=ql)
-        else:
-            if token.startswith('r'):
-                dur = token[1:]
-                ql = 1.0
-                if dur:
-                    ql = 4.0 / float(dur.replace('.', ''))
-                    if '.' in dur: ql *= 1.5
-                element = music21.note.Rest(quarterLength=ql)
-            else:
-                # accept a wider set of accidental spellings (mol, bemol, unicode flats/sharps)
-                # Require at least one digit for duration capture
-                m_note = re.match(r"([a-gr](?:is|es|mol|bemol|#|b|\u266f|\u266d)?[,']*)(\d+\.?)", token, re.IGNORECASE)
-                if m_note:
-                    pitch_tok, dur_tok = m_note.groups()
-                    ql = 1.0
-                    if dur_tok:
-                        ql = 4.0 / float(dur_tok.replace('.', ''))
-                        if '.' in dur_tok: ql *= 1.5
-                    p = _resolve_relative_pitch(pitch_tok, last_pitch, warnings, suggestions)
-                    element = music21.note.Note(p, quarterLength=ql)
-
-        if element is not None:
-            part.append(element)
-            if hasattr(element, 'pitch'):
-                last_pitch = element.pitch
-            elif hasattr(element, 'pitches') and element.pitches:
-                last_pitch = element.pitches[-1]
-
-    # Attach any collected warnings/suggestions to the part for downstream
-    # inspection by the engraver.
-    try:
-        if warnings:
-            part._parse_warnings = warnings
-        if suggestions:
-            part._parse_suggestions = suggestions
-    except Exception:
-        pass
-
-    return part
-
-    # (Note: unreachable)
-
-
-def _resolve_relative_pitch(token, last_pitch, warnings: list = None, suggestions: list = None):
-    """Resolve a simple pitch token into an absolute music21 Pitch.
-    This uses music21's tinyNotation to interpret the step+accidentals
-    and then adjusts octaves to be near last_pitch unless explicit
-    octave marks are present.
-    """
-    # First try tinyNotation (best effort). If that fails, parse manually
-    # to support localized accidentals (e.g. 'bmol', 'bemol') and avoid
-    # falling back to C4 which produced many incorrect Cs in outputs.
-    try:
-        tn = f"tinynotation: {token}4"
-        p = music21.converter.parse(tn).notes[0].pitch
-    except Exception as e:
-        # Record a warning the first time this token causes a fallback
-        if warnings is not None:
-            msg = f"tinyNotation parse failed for token '{token}': {e}. Falling back to manual resolution."
-            # avoid duplicates
-            if msg not in warnings:
-                warnings.append(msg)
-        # Add a short actionable suggestion for common cases
-        if suggestions is not None:
-            try:
-                s = f"For token '{token}': consider adding explicit octave markers (e.g., e' or e,), or provide a tinyNotation input, or use canonical accidentals ('is'/'es') instead of localized forms like 'mol'/'bemol'."
-                if s not in suggestions:
-                    suggestions.append(s)
-            except Exception:
-                pass
-        # Manual parse: step, accidental, octave marks
-        
-        # Manual parse: step, accidental, octave marks
-        m = re.match(r"(?P<step>[a-g])(?P<acc>is|es|mol|bemol|#|b|\u266f|\u266d)?(?P<marks>[,']*)", token, re.IGNORECASE)
-        if not m:
-            # last-resort fallback: return a pitch near last_pitch
-            p = music21.pitch.Pitch()
-            p.step = last_pitch.step
-            p.octave = last_pitch.octave
-            return p
-
-        step = m.group('step').upper()
-        acc = (m.group('acc') or '').lower()
-        marks = m.group('marks') or ''
-
-        # Build a base pitch near the last_pitch octave
-        p = music21.pitch.Pitch()
-        p.step = step
-        # default octave: align with last_pitch
-        try:
-            p.octave = int(last_pitch.octave)
-        except Exception:
-            p.octave = 4
-
-        # apply accidental
-        try:
-            if acc in ('is', '#', '\u266f'):
-                p.accidental = music21.pitch.Accidental(1)
-            elif acc in ('es', 'b', 'mol', 'bemol', '\u266d'):
-                p.accidental = music21.pitch.Accidental(-1)
-        except Exception:
-            pass
-
-        # handle explicit octave marks (apostrophes/commas) by shifting
-        if marks:
-            up = marks.count("'")
-            down = marks.count(',')
-            p.octave = p.octave + up - down
-
-        # Now nudge octave so the pitch is nearest to last_pitch (mimic LilyPond)
-        try:
-            while abs(p.ps - last_pitch.ps) > 6:
-                if p.ps > last_pitch.ps:
-                    p.octave -= 1
-                else:
-                    p.octave += 1
-        except Exception:
-            pass
-
-    return p
 

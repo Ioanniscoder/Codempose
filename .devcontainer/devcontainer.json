@@ -4,7 +4,21 @@
     "dockerfile": "Dockerfile"
   },
   "workspaceFolder": "/workspaces/Codempose",
-  "forwardPorts": [8888],
+  "forwardPorts": [8888, 8000],
   "postCreateCommand": "pip install -r requirements.txt",
+  "portsAttributes": {
+    "8888": {
+      "label": "Outputs HTTP server",
+      "onAutoForward": "openBrowser",
+      "protocol": "http",
+      "description": "Serves generated artifacts from outputs/"
+    },
+    "8000": {
+      "label": "Optional app port",
+      "onAutoForward": "notify",
+      "protocol": "http",
+      "description": "Generic forwarded port"
+    }
+  },
   "postStartCommand": "bash .devcontainer/devcontainer-start.sh"
 }

@@ -1,0 +1,215 @@
+═══════════════════════════════════════════════════════════════════════════════
+                    CODEMPOSE DUAL-FORMAT SYSTEM SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+QUESTION: "Where is SOURCE_MELODY_TINY in first.py?"
+
+ANSWER: It doesn't exist yet! It will be AUTO-GENERATED when you:
+        1. Set PROMOTE_TO_TINYNOTATION = True (line 18)
+        2. Run: python3 first.py
+        3. It appears at line ~42 (right after SOURCE_MELODY_LILY)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+CURRENT first.py STRUCTURE:
+
+Line 18:   PROMOTE_TO_TINYNOTATION = False
+
+Lines 28-40:  SOURCE_MELODY_LILY = r"""
+              \relative e {
+                  \time 6/4
+                  \key c \major
+                  \tempo 4=90
+                  e2 bmol4 c2 r4 |
+                  e2 f#4 e2 r4 |
+                  b2. f'2. |
+                  e2. c2. |
+                  e2 b2 c2
+              }
+              """
+
+Line 42:   # TinyNotation format will appear here after promotion
+
+Lines 43-48:  MELODY_SNIPPETS = {
+                  'simple': r"\relative c' { c4 d e f | g a b c }",
+                  'ascending': r"\relative g' { e4 fs g a | b c d e }",
+                  'descending': r"\relative c'' { c4 b a g | f e d c }",
+              }
+
+Lines 54-60:  HARMONY_SNIPPETS = {
+                  'simple_chords': r"\relative c { <e g b>2 <f a c'>2 <g b d'>2 }",
+                  'bass_line': r"\relative c { e2 b2 c2 f2 g2 c2 }",
+                  'arpeggios': r"\relative c { e8 g b g e g b g }",
+                  'sustained': r"\relative c { e1 b1 c1 }",
+              }
+
+Line 63:   DEFAULT_HARMONY = HARMONY_SNIPPETS['bass_line']
+
+Lines 66-141:  def build_score_data():
+                   # Parse snippets
+                   melody_data = parse_lilypond_to_data(SOURCE_MELODY_LILY)
+                   harmony_data = parse_lilypond_to_data(DEFAULT_HARMONY)
+                   
+                   # Convert to music21 Parts
+                   melody_part = data_to_part(melody_events)
+                   harmony_part = data_to_part(harmony_events)
+                   
+                   # Apply transformations
+                   melody_final = melody_part.flatten().notesAndRests.stream()
+                   harmony_final = harmony_part.transpose(-12)
+                   
+                   # Return two-part score
+                   return {
+                       'metadata': {...},
+                       'parts': {
+                           'Melody': melody_events,
+                           'Harmony': harmony_events,
+                       }
+                   }
+
+═══════════════════════════════════════════════════════════════════════════════
+
+AFTER PROMOTION (What first.py will look like):
+
+Line 18:   PROMOTE_TO_TINYNOTATION = False  # Auto-disabled after promotion
+
+Lines 28-40:  SOURCE_MELODY_LILY = r"""
+              \relative e {
+                  \time 6/4
+                  \key c \major
+                  \tempo 4=90
+                  e2 bmol4 c2 r4 |
+                  e2 f#4 e2 r4 |
+                  b2. f'2. |
+                  e2. c2. |
+                  e2 b2 c2
+              }
+              """  ◄─── PRESERVED! (not commented out)
+
+Lines 42-44:  # TinyNotation equivalent (auto-generated from SOURCE_MELODY_LILY)
+              # Toggle PROMOTE_TO_TINYNOTATION to switch which format gets processed
+              SOURCE_MELODY_TINY = "time=6/4 key=Cmajor tempo=90 E2 B-4 c2 r4 e2 f#4 e2 r4 b2. f'2. e'2. c'2. e'2 b'2 c''2"
+                                    ▲
+                                    │
+                        THIS IS WHERE IT APPEARS!
+
+═══════════════════════════════════════════════════════════════════════════════
+
+TWO-STAVE OUTPUT FLOW:
+
+build_score_data()
+    │
+    ├─► Parse SOURCE_MELODY_LILY  → melody_data
+    ├─► Parse DEFAULT_HARMONY     → harmony_data
+    │
+    ├─► Convert to music21 Parts
+    │       ├─► melody_part
+    │       └─► harmony_part
+    │
+    ├─► Apply transformations
+    │       ├─► melody_final = melody_part (identity/copy)
+    │       └─► harmony_final = harmony_part.transpose(-12)
+    │
+    └─► Return score_data with TWO parts:
+            {
+                'parts': {
+                    'Melody': [e,2, bes,4, c2, ...]   ◄─── Treble clef
+                    'Harmony': [e,,2, b,,2, c,2, ...]  ◄─── Bass clef
+                }
+            }
+            │
+            ▼
+engrave_with_abjad()
+            │
+            ▼
+outputs/first.ly:
+    <<
+      \new Staff {               ◄─── BASS STAFF (Harmony)
+        \clef bass
+        \time 6/4 \key c \major \tempo 4 = 90
+        e,,2 b,,2 c,2 f,2 g,2 c2
+      }
+      \new Staff {               ◄─── TREBLE STAFF (Melody)
+        \clef treble
+        \time 6/4 \key c \major \tempo 4 = 90
+        e,2 bes,4 c2 r4 e2 fis4 e2 r4 b2. f'2. e'2. c'2. e'2 b'2 c''2
+      }
+    >>
+
+═══════════════════════════════════════════════════════════════════════════════
+
+PIPELINE PRIORITY SYSTEM:
+
+When run_pipeline_from_file() is called, it checks in this order:
+
+    Priority 1: build_score_data()  ◄─── first.py uses THIS
+    Priority 2: SOURCE_MELODY_TINY  ◄─── Will be used if build_score_data() removed
+    Priority 3: SOURCE_MELODY_LILY  ◄─── Fallback option
+    Priority 4: build_part()        ◄─── Lowest priority
+
+Because first.py has build_score_data(), it processes regardless of whether
+SOURCE_MELODY_TINY exists. The toggle controls whether TINY gets generated,
+but doesn't affect processing when build_score_data() is present.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+USAGE GUIDE:
+
+1. RUN CURRENT VERSION (no promotion):
+   $ python3 first.py
+   
+   Output: Two-stave score using build_score_data()
+           - Reads SOURCE_MELODY_LILY for melody
+           - Reads HARMONY_SNIPPETS['bass_line'] for harmony
+           - Generates outputs/first.pdf with treble + bass staves
+
+2. ENABLE PROMOTION (generate TinyNotation):
+   # Edit first.py line 18:
+   PROMOTE_TO_TINYNOTATION = True
+   
+   $ python3 first.py
+   
+   Output: Promotion happens
+           - Creates first.YYYYMMDD_HHMMSS.bak backup
+           - Adds SOURCE_MELODY_TINY to file
+           - Disables toggle
+           - Continues to generate two-stave score
+
+3. AFTER PROMOTION (both formats visible):
+   $ python3 first.py
+   
+   Output: Same two-stave score using build_score_data()
+           - SOURCE_MELODY_LILY still readable (for reference)
+           - SOURCE_MELODY_TINY now visible (for comparison)
+           - Both formats preserved in file
+
+4. EXPERIMENT WITH HARMONY:
+   # Edit line 63 in first.py:
+   DEFAULT_HARMONY = HARMONY_SNIPPETS['simple_chords']
+   
+   $ python3 first.py
+   
+   Output: Two-stave score with different harmony pattern
+
+═══════════════════════════════════════════════════════════════════════════════
+
+KEY DESIGN FEATURES:
+
+✅ Both LilyPond and TinyNotation preserved for visual inspection
+✅ Melody and harmony snippets organized in dictionaries
+✅ Two-stave output (treble melody + bass harmony)
+✅ Music21 transformations: identity, transpose, (chordify, inversion commented)
+✅ Promotion toggle auto-generates TinyNotation
+✅ Backup created before file modification
+✅ Metadata fully preserved (time, key, tempo)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+FILES GENERATED BY: python3 first.py
+
+outputs/first.ly    - Two-stave LilyPond source
+outputs/first.pdf   - Musical score (treble + bass staves)
+outputs/first.midi  - Audio playback
+outputs/first.py    - Copy of source file (for inspection)
+
+═══════════════════════════════════════════════════════════════════════════════

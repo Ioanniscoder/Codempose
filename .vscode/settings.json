@@ -1,5 +1,18 @@
 {
   // Workspace hint for human readers and some tools/extensions.
   "preferredAssistantLanguage": "en",
-  "assistant.preferredLanguage": "en"
+  "assistant.preferredLanguage": "en",
+  "remote.portsAttributes": {
+    "8000": {
+      "label": "Outputs Server (8000)",
+      "onAutoForward": "openBrowser",
+      "protocol": "http"
+    },
+    "8888": {
+      "label": "Devcontainer Server (8888)",
+      "onAutoForward": "openBrowser",
+      "protocol": "http"
+    }
+  }
 }
+

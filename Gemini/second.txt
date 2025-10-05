@@ -1,0 +1,41 @@
+# first.py
+
+from typing import Dict
+import music21
+from music_data import data_to_part, extract_data_from_part
+from project_template import parse_lilypond_snippet
+
+SOURCE_MELODY_LILY = r"\relative e { \time 6/4 \key c \major \tempo 4=90 e2 bmol4 c2 r4 | e2 f#4 e2 r4 | b2. f'2. | e2. c2. | e2 b2 c2 }"
+
+def create_harmony_part(part: music21.stream.Part) -> music21.stream.Part:
+    """Generates a simple harmony part by chordifying the melody."""
+    harmony = part.chordify()
+    harmony.id = 'Harmony'
+    return harmony
+
+def build_score_data() -> Dict:
+    """Builds a multi-part score_data dictionary from the source LilyPond snippet."""
+    # 1. Parse the source snippet into a music21.Part object.
+    melody_part = parse_lilypond_snippet(SOURCE_MELODY_LILY)
+    melody_part.id = 'Melody'
+
+    # 2. Programmatically create the harmony.
+    harmony_part = create_harmony_part(melody_part)
+    
+    # 3. Convert music21 objects back to event lists for the engraver.
+    melody_events = extract_data_from_part(melody_part)
+    harmony_events = extract_data_from_part(harmony_part)
+
+    # 4. Assemble the final score_data dictionary.
+    metadata = {
+        'title': 'First Study (Corrected)',
+        'original_input': SOURCE_MELODY_LILY
+    }
+    
+    return {
+        'metadata': metadata,
+        'parts': {
+            'Melody': melody_events,
+            'Harmony': harmony_events,
+        },
+    }
