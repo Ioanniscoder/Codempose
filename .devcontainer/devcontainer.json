@@ -20,5 +20,20 @@
       "description": "Generic forwarded port"
     }
   },
-  "postStartCommand": "bash .devcontainer/devcontainer-start.sh"
+  "postStartCommand": "bash .devcontainer/devcontainer-start.sh",
+  
+  // Add this section:
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "GitHub.copilot",
+        "GitHub.copilot-chat"
+      ],
+      "settings": {
+        "github.copilot.enable": {
+          "*": true
+        }
+      }
+    }
+  }
 }
