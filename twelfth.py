@@ -411,6 +411,8 @@ def build_score_data() -> Dict[str, Dict]:
             },
             'voice_assignments': VOICE_ASSIGNMENTS,
             'voice_tracking': voice_tracking,
+            # **INSPECTOR**: Include parser's TinyNotation for diagnostic purposes
+            'tinynotation_inspector': parsed.get('metadata', {}).get('tinynotation_inspector', ''),
         },
         'parts': {
             'SingleLine': single_line,

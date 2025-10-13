@@ -189,6 +189,12 @@ def parse_lilypond_to_data(lily_string: str, part_name: str = "Part 1") -> dict:
     if parse_result.warnings:
         metadata['warnings'] = parse_result.warnings
     
+    # **INSPECTOR**: Store TinyNotation string for diagnostic purposes
+    # This is NOT used in the parsing pipeline, but allows you to verify
+    # that pitch resolution is working correctly
+    if parse_result.tiny_notation:
+        metadata['tinynotation_inspector'] = parse_result.tiny_notation
+    
     # Also store the full token tracking data in metadata for reference
     if parse_result.tokens:
         metadata['parser_tokens'] = [

@@ -151,6 +151,24 @@ def _build_documentation_block(metadata: dict, source_file: str = None) -> str:
                 lines.append(f"%     {snippet}")
                 lines.append("%")
     
+    # ========================================
+    # TINYNOTATION INSPECTOR (Diagnostic Tool)
+    # ========================================
+    tiny_inspector = metadata.get('tinynotation_inspector', '')
+    if tiny_inspector:
+        has_content = True
+        lines.extend([
+            "% ========================================",
+            "% TINYNOTATION INSPECTOR (Diagnostic)",
+            "% ========================================",
+            "% This TinyNotation string shows how the parser",
+            "% resolved relative pitches. Use it to verify",
+            "% octave resolution is working correctly.",
+            "%",
+            f"%   {tiny_inspector}",
+            "%",
+        ])
+    
     # Legacy support: original_input field
     original_input = metadata.get('original_input', '')
     if original_input and not original_snippets:
