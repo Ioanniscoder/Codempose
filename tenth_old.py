@@ -38,13 +38,11 @@ PROMOTE_TO_PROGRAMMATIC = False  # Will be toggled after reviewing generated cod
 # ============================================================================
 
 from lilypond_parser import parse_lilypond_to_data
+from lily_to_tiny import lilypond_to_tinynotation
 from music_data import extract_data_from_part, data_to_part
+from second import transpose_events, invert_events
 from voice_documentation import register_and_document_voice
-from composition_shorthand import (
-    build_score_from_assignments,
-    transpose_events,
-    invert_events
-)
+from composition_shorthand import build_score_from_assignments
 
 
 # ============================================================================

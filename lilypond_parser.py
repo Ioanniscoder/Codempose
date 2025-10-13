@@ -61,104 +61,129 @@ def _parse_tiny_duration(dur_str: str) -> float:
     return ql
 
 
+def _parse_duration_to_ql(duration_str: str) -> float:
+    """Convert LilyPond duration string to quarterLength."""
+    if not duration_str:
+        return 1.0  # Default quarter note
+    
+    # Extract base duration and dot
+    match = re.match(r'(\d+)(\.{0,3})', duration_str)
+    if not match:
+        return 1.0
+    
+    base = int(match.group(1))
+    dots = len(match.group(2))
+    
+    # Base quarter length (4 = quarter note = 1.0)
+    ql = 4.0 / base
+    
+    # Add dotted duration
+    for _ in range(dots):
+        ql += ql / 2
+    
+    return ql
+
+
+def _accidental_to_alter(accidental: str) -> int:
+    """Convert normalized accidental string to MIDI alter value."""
+    mapping = {
+        '': 0,
+        'sharp': 1,
+        'flat': -1,
+        'double-sharp': 2,
+        'double-flat': -2,
+    }
+    return mapping.get(accidental, 0)
+
+
+def _extract_octave_from_tiny(tiny_token: str) -> int:
+    """Extract octave number from TinyNotation token."""
+    # Count octave markers
+    up_markers = tiny_token.count("'")
+    down_markers = tiny_token.count(",")
+    
+    # Base octave is 4 in TinyNotation
+    return 4 + up_markers - down_markers
+
+
 def parse_lilypond_to_data(lily_string: str, part_name: str = "Part 1") -> dict:
     """
     Parses a LilyPond shorthand string into the standard data dictionary.
     Returns a dict: {"metadata": {...}, "parts": { part_name: [events...] }}
     
-    Now uses the validated lily_to_tiny_notation() parser with correct
-    relative octave logic (alphabetical tie-breaking, not shortest diatonic path).
+    CORRECTED APPROACH: Directly convert parsed tokens to event dictionaries,
+    bypassing TinyNotation string intermediary which causes data loss.
     """
     # Basic sanitization (strip control chars that break tokenization)
     if lily_string is None:
         lily_string = ''
     lily_string = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]+", '', lily_string)
 
-    # Use the new validated parser
+    # Use the parser to get structured token data
     parse_result = lily_to_tiny_notation(lily_string)
     
     # Handle errors
     if not parse_result.success:
         raise ValueError(f"Parser error: {parse_result.error}")
     
-    # Parse the complete TinyNotation string using music21
-    # This is more reliable than parsing individual tokens
-    part = music21.stream.Part()
+    # Convert parsed tokens DIRECTLY to event dictionaries
+    # This avoids the broken TinyNotation string intermediary
+    events = []
     
-    try:
-        # Use the complete TinyNotation string from the parser
-        tiny_string = parse_result.tiny_notation
+    for token_info in parse_result.tokens:
+        # Parse the ORIGINAL LilyPond token to get structured data
+        from lily_token_parser import parse_token, pitch_to_midi
+        from relative_octave_logic import parse_base_pitch
         
-        # Parse with music21's TinyNotation parser
-        tiny_obj = music21.converter.parse(f"tinynotation: {tiny_string}")
+        parsed = parse_token(token_info.original)
         
-        # Extract notes and rests
-        for element in tiny_obj.flatten().notesAndRests:
-            part.append(element)
+        # For now, we need to extract octave from the converted TinyNotation
+        # This is a temporary bridge until we refactor to store absolute octave in TokenInfo
+        tiny_token = token_info.converted
         
-        # Add time signature if present (music21 may have already added it, but ensure it's at position 0)
-        if 'time' in parse_result.directives:
-            ts_str = parse_result.directives['time']
-            numerator, denominator = map(int, ts_str.split('/'))
-            ts = music21.meter.TimeSignature(f"{numerator}/{denominator}")
-            # Remove any existing time signatures
-            for existing_ts in part.getElementsByClass(music21.meter.TimeSignature):
-                part.remove(existing_ts)
-            part.insert(0, ts)
+        if parsed.is_rest:
+            # Rest event
+            events.append({
+                'type': 'rest',
+                'ql': _parse_duration_to_ql(parsed.duration),
+                'original_token': token_info.original,
+                'position': token_info.position
+            })
+        elif parsed.pitch_letter and parsed.pitch_letter.startswith('<'):
+            # Chord - skip for now (needs special handling)
+            continue
+        else:
+            # Note event - extract octave from TinyNotation
+            octave = _extract_octave_from_tiny(tiny_token)
             
-    except Exception as e:
-        raise ValueError(f"Failed to build music21 Part from tokens: {e}")
+            events.append({
+                'type': 'note',
+                'step': parsed.pitch_letter.upper(),
+                'octave': octave,
+                'alter': _accidental_to_alter(parsed.accidental),
+                'ql': _parse_duration_to_ql(parsed.duration),
+                'original_token': token_info.original,
+                'position': token_info.position
+            })
 
     # Extract metadata - start with defaults
     metadata = {"title": "LilyPond Score", "composer": "Codempose"}
     
-    # Extract from directives dictionary (not list)
+    # Extract from directives
     if parse_result.directives:
-        # Time signature
         if 'time' in parse_result.directives:
             metadata["time_signature"] = parse_result.directives['time']
-        
-        # Key signature: parse "c \\major" or "d \\minor"
         if 'key' in parse_result.directives:
-            key_str = parse_result.directives['key']
-            # Format is "c \\major" or "d \\minor"
-            match = re.match(r'([a-g](?:es|is)?)\s+\\(major|minor)', key_str)
-            if match:
-                tonic = match.group(1)
-                mode = match.group(2)
+            # Parse key signature (e.g., "c \major")
+            key_match = re.match(r'([a-g][#b]?)\s+(\\major|\\minor)', parse_result.directives.get('key', ''))
+            if key_match:
+                tonic = key_match.group(1)
+                mode = 'major' if 'major' in key_match.group(2) else 'minor'
                 metadata["key_signature"] = {"tonic": tonic, "mode": mode}
-        
-        # Tempo: parse "4 = 120" format
         if 'tempo' in parse_result.directives:
-            tempo_str = parse_result.directives['tempo']
-            # Format is "4 = 120" or similar
-            match = re.match(r'(\d+)\s*=\s*(\d+)', tempo_str)
-            if match:
-                beat_duration = int(match.group(1))
-                bpm = int(match.group(2))
-                metadata["tempo"] = {
-                    "beat_duration": beat_duration,
-                    "bpm": bpm
-                }
-    
-    # Also check music21 Part for metadata (fallback)
-    ts = part.getElementsByClass(music21.meter.TimeSignature)
-    if ts and "time_signature" not in metadata:
-        metadata["time_signature"] = ts[0].ratioString
-    ks = part.getElementsByClass(music21.key.Key)
-    if ks and "key_signature" not in metadata:
-        k = ks[0]
-        metadata["key_signature"] = {
-            "tonic": getattr(k.tonic if hasattr(k, 'tonic') else k.tonicPitch, 'name', 'C'),
-            "mode": getattr(k, 'mode', 'major')
-        }
-    tm = part.getElementsByClass(music21.tempo.MetronomeMark)
-    if tm and "tempo" not in metadata:
-        metadata["tempo"] = int(getattr(tm[0], 'number', 120))
-
-    # Convert the music21 Part to the canonical event list
-    # Pass TokenInfo data for event-level tracking (direct parsing only)
-    events = extract_data_from_part(part, token_infos=parse_result.tokens)
+            tempo_match = re.search(r'=\s*(\d+)', parse_result.directives['tempo'])
+            if tempo_match:
+                metadata["tempo"] = int(tempo_match.group(1))
 
     # Attach any parsing warnings to the metadata
     if parse_result.warnings:

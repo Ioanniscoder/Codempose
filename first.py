@@ -1,164 +1,138 @@
-"""Study file: Two-stave composition with melody and harmony snippets
+"""Template study file: richer `first.py` used as a starting point for
+experimentation and tests.
 
-This module demonstrates the Codempose workflow with:
-- Cleanly organized melody and harmony snippets (LilyPond and TinyNotation)
-- Two-stave output (treble melody + bass harmony)
-- Music21 transformations: identity, chordify, inversion, etc.
+This module exposes a primary LilyPond snippet constant (used by
+`main.py` when present) and also provides helpers that build a
+music21.Part so tests can import and call `build_part()` directly.
 
-PROMOTION SYSTEM:
-- Set PROMOTE_TO_TINYNOTATION = True to auto-generate SOURCE_MELODY_TINY
-- Both formats are preserved for visual inspection
-- SOURCE_MELODY_TINY takes priority when present
+Design goals:
+- Keep the file safe to import (no destructive side-effects).
+- Provide several example snippets (LilyPond and tinyNotation).
+- Provide `build_part()` which returns a music21.Part (used by
+  `main.py` when the study module exposes a `build_part()` function).
+- Provide a small example `add_harmony()` helper that demonstrates
+  how to Huur transform the Part with music21 objects.
+
+Later the file can be installed (promoted) by an installer that
+replaces the working template; until then it remains read-only.
 """
 
-# ============================================================================
-# PROMOTION TOGGLE
-# ============================================================================
+from typing import Dict, Optional
 
-# Set to True to generate TinyNotation format from LilyPond
-# Both formats will be preserved in the file for comparison
-PROMOTE_TO_TINYNOTATION = False
+# Primary human-facing LilyPond snippet. `main.py` will prefer this
+# when present. Keep this concise and representative.
+SOURCE_MELODY_LILY = r"\relative e { \time 6/4 \key c \major \tempo 4=90 e2 bmol4 c2 r4 | e2 f#4 e2 r4 | b2. f'2. | e2. c2. | e2 b2 c2 }"
 
-
-# ============================================================================
-# MELODY SNIPPETS
-# ============================================================================
-
-# Primary melody in LilyPond format (reference - visual correlation with TinyNotation)
-SOURCE_MELODY_LILY = r"""
-\relative e' {
-    \time 6/4
-    \key c \major
-    \tempo 4=90
-    e2 bmol4 c2 r4 |
-    e2 f#4 e2 r4 |
-    b2. f'2. |
-    e2. c2. |
-    e2 b2 c2
-}
-""".strip()
-
-# TinyNotation equivalent (for visual comparison with LilyPond)
-# PROMOTE_TO_TINYNOTATION toggle controls which format is dominant (gets processed)
-SOURCE_MELODY_TINY = "time=6/4 key=Cmajor tempo=90 e2 b-4 c'2 r4 e'2 f#'4 e'2 r4 b'2. f''2. e''2. c''2. e''2 b''2 c'''2"
-
-
-# Alternative melody snippets for experimentation
-MELODY_SNIPPETS = {
-    'simple': r"\relative c' { c4 d e f | g a b c }",
-    'ascending': r"\relative g' { e4 fs g a | b c d e }",
-    'descending': r"\relative c'' { c4 b a g | f e d c }",
+# A small set of test snippets (both LilyPond and tinyNotation) that
+# are useful during development and automated tests.
+ALTERNATE_SNIPPETS: Dict[str, str] = {
+	'simple_lily': r"\relative c' { c4 d e f | g a b c }",
+	'melody_variant': r"\relative g' { e4 fs g a | b c d e }",
+	'tiny_example': "c4 d8 e f2 g4 a b c'",  # tinyNotation snippet
 }
 
+# A short harmony snippet used by the example transform below.
+HARMONY_SNIPPET = r"<e g b>2 <f a c'>2"
 
-# ============================================================================
-# HARMONY SNIPPETS
-# ============================================================================
-
-# Harmony patterns to accompany the melody (LilyPond format)
-HARMONY_SNIPPETS = {
-    'simple_chords': r"\relative c { <e g b>2 <f a c'>2 <g b d'>2 }",
-    'bass_line': r"\relative c { e2 b2 c2 f2 g2 c2 }",
-    'arpeggios': r"\relative c { e8 g b g e g b g }",
-    'sustained': r"\relative c { e1 b1 c1 }",
-}
-
-# Default harmony to use
-DEFAULT_HARMONY = HARMONY_SNIPPETS['bass_line']
+# Default output basename (main.py will override when --output passed).
+OUTPUT_BASENAME = 'first_score'
 
 
-# ============================================================================
-# COMPOSITION FUNCTIONS
-# ============================================================================
+def get_snippets() -> Dict[str, str]:
+	"""Return a dictionary of available snippets for interactive use.
 
-def build_score_data():
-    """
-    Build a two-part score with melody and harmony.
-    
-    This function demonstrates music21 transformations:
-    - Identity/copy: Create independent parts from the same source
-    - Chordify: Combine melody and harmony into chords
-    - Transpose: Shift pitches by interval
-    - Inversion: Mirror melodic contours
-    
-    Returns:
-        dict: Score data with metadata and parts
-    """
-    from lilypond_parser import parse_lilypond_to_data
-    from music_data import extract_data_from_part, data_to_part
-    import music21
-    
-    # Parse the primary melody
-    melody_data = parse_lilypond_to_data(SOURCE_MELODY_LILY, part_name='Melody')
-    melody_events = melody_data['parts']['Melody']
-    melody_metadata = melody_data['metadata']
-    
-    # Parse the harmony
-    harmony_data = parse_lilypond_to_data(DEFAULT_HARMONY, part_name='Harmony')
-    harmony_events = harmony_data['parts']['Harmony']
-    
-    # Convert to music21 Parts for transformations
-    melody_part = data_to_part(melody_events, metadata=melody_metadata)
-    harmony_part = data_to_part(harmony_events, metadata=melody_metadata)
-    
-    # ========================================================================
-    # MUSIC21 TRANSFORMATIONS
-    # ========================================================================
-    
-    # 1. Identity/Copy - preserve original melody on top staff
-    melody_final = melody_part.flatten().notesAndRests.stream()
-    
-    # 2. Transpose harmony down an octave for bass range
-    harmony_final = harmony_part.transpose(-12)
-    
-    # Optional: Demonstrate chordify (commented out by default)
-    # combined = music21.stream.Score([melody_part, harmony_part])
-    # chordified = combined.chordify()
-    
-    # Optional: Demonstrate inversion (commented out by default)
-    # inverted_melody = melody_part.transpose(0)  # Copy first
-    # for note in inverted_melody.flatten().notes:
-    #     interval = music21.interval.Interval(note, music21.pitch.Pitch('C4'))
-    #     note.transpose(-2 * interval.semitones, inPlace=True)
-    
-    # ========================================================================
-    # BUILD FINAL SCORE DATA
-    # ========================================================================
-    
-    # Extract events from transformed parts
-    melody_final_events = extract_data_from_part(melody_final)
-    harmony_final_events = extract_data_from_part(harmony_final)
-    
-    # Construct score_data dict
-    original_snippets = f"""LILYPOND FORMAT:
-{SOURCE_MELODY_LILY}
-
-TINYNOTATION FORMAT:
-{SOURCE_MELODY_TINY}"""
-    
-    score_data = {
-        'metadata': {
-            'title': 'First Study - Two-Part Composition',
-            'time_signature': melody_metadata.get('time_signature', '6/4'),
-            'key_signature': melody_metadata.get('key_signature', {'tonic': 'c', 'mode': 'major'}),
-            'tempo': melody_metadata.get('tempo', {'beat_duration': 4, 'bpm': 90}),
-            'composer': 'Codempose',
-            'original_input': original_snippets,
-        },
-        'parts': {
-            'Melody': melody_final_events,
-            'Harmony': harmony_final_events,
-        }
-    }
-    
-    return score_data
+	This helper is convenient when you import the study module in a
+	REPL to inspect or to pick an example to build.
+	"""
+	d = {'primary': SOURCE_MELODY_LILY}
+	d.update(ALTERNATE_SNIPPETS)
+	return d
 
 
-# ============================================================================
-# EXECUTION
-# ============================================================================
+def build_part(snippet: Optional[str] = None):
+	"""Build and return a music21.stream.Part from a snippet.
+
+	Behavior:
+	- If `snippet` is None, use `SOURCE_MELODY_LILY`.
+	- If `snippet` matches a key in `ALTERNATE_SNIPPETS`, use that
+	  stored snippet (tinyNotation or LilyPond style strings).
+	- Parsing is delegated to the existing pipeline helpers so the
+	  canonical data dict path is exercised.
+
+	Returns:
+		music21.stream.Part
+	"""
+	# Local import to avoid heavy startup cost when the file is merely
+	# inspected. These project helpers are available in the workspace.
+	from lilypond_parser import parse_lilypond_to_data
+	from music_data import data_to_part
+
+	use = snippet or SOURCE_MELODY_LILY
+	# If user passed a known key, resolve it
+	if isinstance(use, str) and use in ALTERNATE_SNIPPETS:
+		use = ALTERNATE_SNIPPETS[use]
+
+	# Use the robust parser implemented in this repository which
+	# returns the canonical data dict (metadata + parts)
+	score_data = parse_lilypond_to_data(use, part_name='Main Melody')
+	events = score_data.get('parts', {}).get('Main Melody')
+	if events is None:
+		raise RuntimeError('Parser did not return events for Main Melody')
+
+	# Convert canonical events to a music21 Part
+	part = data_to_part(events, metadata=score_data.get('metadata'))
+
+	# Example: attach parser diagnostics (if any) to the Part for
+	# callers to inspect programmatically.
+	warnings = score_data.get('metadata', {}).get('warnings') or []
+	suggestions = score_data.get('metadata', {}).get('suggestions') or []
+	# Attach as attributes (non-persistent) so calling code can see them
+	setattr(part, '_parse_warnings', warnings)
+	setattr(part, '_parse_suggestions', suggestions)
+
+	return part
+
+
+def add_harmony(base_part, harmony_snippet: Optional[str] = None):
+	"""Return a new music21.Score with the base part and a simple
+	harmony part (derived from a short snippet).
+
+	This demonstrates how one might programmatically construct a
+	multi-part Score from the parsed melody.
+	"""
+	from music21 import stream
+
+	harmony_snip = harmony_snippet or HARMONY_SNIPPET
+	try:
+		# Use the same pipeline path to parse the harmony snippet
+		from lilypond_parser import parse_lilypond_to_data
+		from music_data import data_to_part
+
+		hd = parse_lilypond_to_data(harmony_snip, part_name='Harmony')
+		h_events = hd.get('parts', {}).get('Harmony', [])
+		harmony_part = data_to_part(h_events, metadata=hd.get('metadata'))
+	except Exception:
+		# If parsing fails, build a small placeholder part
+		harmony_part = stream.Part()
+
+	score = stream.Score()
+	score.append(base_part)
+	score.append(harmony_part)
+	return score
+
 
 if __name__ == '__main__':
-    from project_template import run_pipeline_from_file
-    run_pipeline_from_file(__file__)
+	# Minimal interactive helper when executed directly: list snippets
+	print('first.py (template): available snippets:')
+	for k in get_snippets().keys():
+		print(' -', k)
+
+SOURCE_MELODY_LILY = r"\relative e { \time 6/4 \key c \major \tempo 4=90 e2 bmol4 c2 r4 | e2 f#4 e2 r4 | b2. f'2. | e2. c2. | e2 b2 c2 }"
+HARMONY_SNIPPET = r"e2 b2 <e g b>2"
+OUTPUT_BASENAME = 'first_score'
+
+# Self-executing entry point - enables direct execution with: python first.py
+if __name__ == '__main__':
+	from project_template import run_pipeline_from_file
+	run_pipeline_from_file(__file__)
 

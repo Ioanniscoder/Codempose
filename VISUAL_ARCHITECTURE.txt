@@ -1,0 +1,403 @@
+# Codempose Visual Architecture
+## Four-Station System Diagram
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                       CODEMPOSE COMPOSITION SYSTEM                          │
+│                         Four-Station Architecture                           │
+└────────────────────────────────────────────────────────────────────────────┘
+
+                              PROMOTION PRINCIPLE
+                          ═══════════════════════════
+                          Start Simple → Add Power
+                          ═══════════════════════════
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STATION 1: LilyPond Shorthand                        [ENTRY POINT]          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SOURCE_MELODY_LILY = r"\relative c' { \time 4/4 c4 d e f | g2 e2 }"       │
+│                                                                              │
+│  ✓ Human-readable musical notation                                          │
+│  ✓ Direct pitch entry with \relative mode                                   │
+│  ✓ Metadata: \time, \key, \tempo                                            │
+│  ✓ Chord support: <e g b>2                                                  │
+│                                                                              │
+│  When to use: Starting new composition, simple melodies                     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      │ Auto-Promote
+                                      │ (PROMOTE_TO_TINYNOTATION = True)
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STATION 2: TinyNotation                              [SIMPLIFIED]           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SOURCE_MELODY_TINY = "4/4 c4 d4 e4 f4 g2 e2"                               │
+│                                                                              │
+│  ✓ Simplified format (no \relative complexity)                              │
+│  ✓ Direct octave specification: c4, c'4, c''4                               │
+│  ✓ Compact metadata header: time=4/4 key=Cmajor                             │
+│                                                                              │
+│  When to use: After promotion, cleaner format preference                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      │ Need Transformations?
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STATION 3: Programmatic Shorthand                    [ALGORITHMIC]          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  VOICE_ASSIGNMENTS = {                                                       │
+│      'Melody': {                                                             │
+│          'Soprano': 'THEME + transpose(THEME, 7) + invert(THEME)',          │
+│          'Alto': 'THEME * 3',                          # Repeat 3x           │
+│      },                                                                      │
+│      'Harmony': {                                                            │
+│          'Bass': 'transpose(BASS, -12)',               # Down an octave     │
+│      }                                                                       │
+│  }                                                                           │
+│                                                                              │
+│  ✓ Declarative transformation syntax                                        │
+│  ✓ Available: +, *, transpose(), invert(), retrograde()                     │
+│  ✓ Musical intent is clear and concise                                      │
+│  ✓ Auto-generates score from assignments                                    │
+│                                                                              │
+│  When to use: Algorithmic patterns, simple transformations                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      │ Need Custom Logic?
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STATION 4: Full Music21 Programming                  [MAXIMUM CONTROL]      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  def build_score_data():                                                     │
+│      # Parse LilyPond                                                        │
+│      theme_data = parse_lilypond_to_data(SOURCE_THEME_LILY, 'Theme')        │
+│                                                                              │
+│      # Convert to music21.Part                                               │
+│      theme_part = data_to_part(theme_data['parts']['Theme'], metadata)      │
+│                                                                              │
+│      # Custom algorithm with full Python control                            │
+│      transformed = custom_musical_algorithm(theme_part)                     │
+│                                                                              │
+│      # Apply music21 functions                                               │
+│      harmony = transformed.chordify()                                        │
+│      analysis = music21.analysis.discrete.Ambitus(transformed)              │
+│                                                                              │
+│      # Extract back to canonical format                                     │
+│      events = extract_data_from_part(transformed)                           │
+│                                                                              │
+│      return {'metadata': metadata, 'parts': {'Melody': events}}             │
+│                                                                              │
+│  ✓ Full music21 library access                                              │
+│  ✓ Custom algorithms, conditional logic                                     │
+│  ✓ Analysis tools, advanced transformations                                 │
+│  ✓ Unlimited compositional power                                            │
+│                                                                              │
+│  When to use: Complex algorithms, analysis, custom logic                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                           HYBRID APPROACH (Ninth Study)
+═══════════════════════════════════════════════════════════════════════════════
+
+                      ┌─────────────────────────────────┐
+                      │  def build_score_data():        │
+                      └─────────────────────────────────┘
+                                     │
+                   ┌─────────────────┴─────────────────┐
+                   │                                   │
+                   ▼                                   ▼
+        ┌──────────────────────┐         ┌──────────────────────┐
+        │ COMPLEX VOICE:       │         │ SIMPLE VOICE:        │
+        │ Station 4 (Python)   │         │ Station 3 (Shorthand)│
+        ├──────────────────────┤         ├──────────────────────┤
+        │                      │         │                      │
+        │ soprano_part =       │         │ bass = parse_voice_  │
+        │   custom_algorithm() │         │   assignment(        │
+        │                      │         │   'BASS * 4',        │
+        │ soprano_events =     │         │   voice_lookup       │
+        │   extract_data()     │         │ )                    │
+        │                      │         │                      │
+        └──────────────────────┘         └──────────────────────┘
+                   │                                   │
+                   └─────────────────┬─────────────────┘
+                                     │
+                                     ▼
+                       ┌──────────────────────────┐
+                       │ return {                 │
+                       │   'parts': {             │
+                       │     'Soprano': soprano,  │  ← Station 4
+                       │     'Bass': bass         │  ← Station 3
+                       │   }                      │
+                       │ }                        │
+                       └──────────────────────────┘
+
+KEY INSIGHT: Use the right tool for each voice!
+             Complex → Station 4 | Simple → Station 3
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                      DOCUMENTATION FEEDBACK (Tenth Study)
+═══════════════════════════════════════════════════════════════════════════════
+
+                         ┌────────────────────────┐
+                         │ Station 4:             │
+                         │ Generate Algorithmically│
+                         └────────────────────────┘
+                                     │
+                                     │ # Generate
+                                     ▼
+                   alto_voice = transpose_events(soprano, -7)
+                                     │
+                                     │ # Document
+                                     ▼
+    register_and_document_voice('ALTO_GENERATED', alto_voice, ...)
+                                     │
+                                     │ # Outputs to .ly file
+                                     ▼
+         ┌────────────────────────────────────────────────────┐
+         │ outputs/tenth.ly                                   │
+         ├────────────────────────────────────────────────────┤
+         │ % ALTO_GENERATED:                                  │
+         │ %   Transformation: transpose(SOPRANO, -7)         │
+         │ %   Result: \relative c' { a4 g8 f8 e4 d4 | ... }  │
+         └────────────────────────────────────────────────────┘
+                                     │
+                                     │ Copy snippet!
+                                     ▼
+                         ┌────────────────────────┐
+                         │ Station 1:             │
+                         │ Edit Manually          │
+                         └────────────────────────┘
+                                     │
+                                     ▼
+         # eleventh.py (NEW COMPOSITION)
+         ALTO_LILY = r"\relative c' { a4 g8 f8 e4 d4 | ... }"
+         
+         # Now you can:
+         # - Edit by hand
+         # - Use as building block
+         # - Apply new transformations
+
+FEEDBACK LOOP COMPLETE: Station 4 → Document → Station 1 → Compose
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                        CANONICAL DATA STRUCTURE
+═══════════════════════════════════════════════════════════════════════════════
+
+                         All Stations Flow Through:
+                           
+                    ┌─────────────────────────────┐
+                    │      score_data             │
+                    ├─────────────────────────────┤
+                    │ {                           │
+                    │   'metadata': {             │
+                    │     'title': str,           │
+                    │     'time_signature': str,  │
+                    │     'key_signature': {...}, │
+                    │     'tempo': int,           │
+                    │     'warnings': [...],      │
+                    │   },                        │
+                    │   'parts': {                │
+                    │     'Part Name': [          │
+                    │       {                     │
+                    │         'type': 'note',     │
+                    │         'step': 'c',        │
+                    │         'octave': 4,        │
+                    │         'alter': 0,         │
+                    │         'ql': 1.0           │
+                    │       },                    │
+                    │       ...                   │
+                    │     ]                       │
+                    │   }                         │
+                    │ }                           │
+                    └─────────────────────────────┘
+                               │
+               ┌───────────────┼───────────────┐
+               ▼               ▼               ▼
+        ┌──────────┐    ┌──────────┐   ┌──────────┐
+        │ LilyPond │    │ music21  │   │ MusicXML │
+        │  (.ly)   │    │  (Part)  │   │  (.xml)  │
+        └──────────┘    └──────────┘   └──────────┘
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                          PIPELINE EXECUTION FLOW
+═══════════════════════════════════════════════════════════════════════════════
+
+                    run_pipeline_from_file(__file__)
+                                │
+                                ▼
+                 ┌──────────────────────────────┐
+                 │ PRIORITY ROUTER              │
+                 │ (Checks in order)            │
+                 └──────────────────────────────┘
+                                │
+        ┌───────────────────────┼───────────────────────┐
+        │                       │                       │
+        ▼                       ▼                       ▼
+  ┌──────────┐          ┌──────────────┐      ┌──────────────┐
+  │Priority 1│          │  Priority 2  │      │  Priority 3  │
+  └──────────┘          └──────────────┘      └──────────────┘
+        │                       │                       │
+        ▼                       ▼                       ▼
+  build_score_      SOURCE_MELODY_TINY      SOURCE_MELODY_LILY
+    data()                    │                       │
+        │                     │                       │
+        │ Stations 3/4        │ Station 2             │ Station 1
+        │                     │                       │
+        │                     │              ┌────────┴────────┐
+        │                     │              │                 │
+        │                     │              ▼                 │
+        │                     │    parse_lilypond_to_data()   │
+        │                     │              │                 │
+        │                     │              ▼                 │
+        │                     │    lily_to_tiny_notation()    │
+        │                     │              │                 │
+        │                     │              ▼                 │
+        │                     │    music21.converter.parse()  │
+        │                     │              │                 │
+        │                     │              ▼                 │
+        │                     │    extract_data_from_part()   │
+        │                     │              │                 │
+        └─────────────────────┴──────────────┴─────────────────┘
+                                │
+                                ▼
+                    ┌───────────────────────┐
+                    │   CANONICAL           │
+                    │   score_data          │
+                    └───────────────────────┘
+                                │
+                                ▼
+                    ┌───────────────────────┐
+                    │ engrave_with_abjad()  │
+                    └───────────────────────┘
+                                │
+                ┌───────────────┴───────────────┐
+                ▼                               ▼
+         outputs/study.ly              outputs/study.pdf
+         outputs/study.midi
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                              KEY COMPONENTS
+═══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ PARSING PIPELINE (Station 1 → score_data)                                │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│  LilyPond Input                                                          │
+│       ↓                                                                   │
+│  lily_tokenizer.py ──────→ Extract directives, \relative base, tokens   │
+│       ↓                                                                   │
+│  lily_token_parser.py ───→ Parse each token (note, rest, chord)         │
+│       ↓                                                                   │
+│  relative_octave_logic.py → Calculate absolute octaves                   │
+│       ↓                                                                   │
+│  lily_to_tiny.py ────────→ Format as TinyNotation                        │
+│       ↓                                                                   │
+│  music21.converter ──────→ Parse TinyNotation                            │
+│       ↓                                                                   │
+│  extract_data_from_part() → Convert to score_data                        │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ TRANSFORMATION PIPELINE (Station 4 workflow)                             │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│  score_data (events)                                                      │
+│       ↓                                                                   │
+│  data_to_part() ─────────→ Convert to music21.Part                       │
+│       ↓                                                                   │
+│  music21 transformations → .transpose(), .chordify(), etc.               │
+│       ↓                                                                   │
+│  extract_data_from_part() → Convert back to score_data                   │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ SHORTHAND PIPELINE (Station 3 workflow)                                  │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│  VOICE_ASSIGNMENTS (declarative)                                          │
+│       ↓                                                                   │
+│  parse_voice_assignment() → Parse expression syntax                      │
+│       ↓                                                                   │
+│  transpose_events(), etc. → Apply transformations                        │
+│       ↓                                                                   │
+│  Event list (already score_data format!)                                 │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                           STUDY FILE PROGRESSION
+═══════════════════════════════════════════════════════════════════════════════
+
+  first.py     second.py    third.py     fourth.py     fifth.py
+  ┌──────┐     ┌──────┐    ┌──────┐     ┌──────┐      ┌──────┐
+  │Basic │     │Chord │    │Templ-│     │Minor │      │Track-│
+  │Setup │ →   │ify   │ →  │ate   │ →   │Key   │  →   │ing   │
+  │1, 4  │     │1, 4  │    │1, 4  │     │1, 4  │      │1     │
+  └──────┘     └──────┘    └──────┘     └──────┘      └──────┘
+                                                            │
+                                                            ▼
+  tenth.py    ninth.py     eighth.py   seventh.py    sixth.py
+  ┌──────┐    ┌──────┐    ┌──────┐     ┌──────┐      ┌──────┐
+  │Docum-│ ←  │Hybrid│ ←  │Transf│  ←  │Short-│  ←   │Multi-│
+  │ent   │    │Mix   │    │orms  │     │hand  │      │Voice │
+  │1,3,4 │    │1,3,4 │    │1, 3  │     │1, 3  │      │1, 3  │
+  └──────┘    └──────┘    └──────┘     └──────┘      └──────┘
+      ▲                                                   
+      │                                                   
+      └───────────────────────────────────────────────────┘
+           CRITICAL INNOVATIONS: Hybrid + Documentation
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                              BEST PRACTICES
+═══════════════════════════════════════════════════════════════════════════════
+
+✓ START SIMPLE (Station 1)
+  └─ Use LilyPond notation for initial composition
+  
+✓ PROMOTE AS NEEDED
+  └─ Only add complexity when simple approach insufficient
+  
+✓ MIX STATIONS FREELY (Hybrid Approach)
+  ├─ Complex voices → Station 4 (full control)
+  ├─ Simple voices → Station 3 (brevity)
+  └─ Use both in same composition!
+  
+✓ DOCUMENT PROGRAMMATIC VOICES
+  └─ Use register_and_document_voice() to capture results
+  
+✓ CLOSE THE LOOP (Feedback)
+  ├─ Generate → Document → Study
+  └─ Copy results back to Station 1 for refinement
+
+✗ DON'T OVER-ENGINEER
+  └─ Avoid Station 4 for simple repetition (use Station 3)
+  
+✗ DON'T FORCE SHORTHAND
+  └─ Use Station 4 for complex algorithms (shorthand has limits)
+```

@@ -82,47 +82,14 @@ def lily_to_tiny_notation(lily_snippet: str) -> ParseResult:
         # Absolute mode (default octave = 3)
         octave_results = process_absolute_sequence(3, parsed_tokens)
     
-    # Step 4: Build TinyNotation string with metadata header and TokenInfo list
+    # Step 4: Build TinyNotation string and TokenInfo list
     tiny_parts = []
     token_infos = []
     last_duration = '4'  # Quarter note default - this gets updated as we go
     
-    # Build metadata header from directives
-    # Format: key=value pairs at the start, e.g., "time=6/4 key=Cmajor tempo=90"
-    header_parts = []
-    
+    # Add time signature if present
     if 'time' in directives:
-        # Format: "time=6/4"
-        header_parts.append(f"time={directives['time']}")
-    
-    if 'key' in directives:
-        # Format: "key=Cmajor" or "key=Dminor"
-        # directives['key'] is like "c \\major" - we need to normalize it
-        key_str = directives['key'].replace('\\', '').strip()  # Remove backslash
-        # Convert "c major" to "Cmajor"
-        parts = key_str.split()
-        if len(parts) >= 2:
-            tonic = parts[0].capitalize()  # "c" -> "C"
-            mode = parts[1].lower()  # "major" -> "major"
-            header_parts.append(f"key={tonic}{mode}")
-        else:
-            # Fallback: just use what we have
-            header_parts.append(f"key={key_str.replace(' ', '')}")
-    
-    if 'tempo' in directives:
-        # Format: "tempo=90" (just the BPM number)
-        # directives['tempo'] is like "4 = 90" - extract just the number
-        tempo_str = directives['tempo']
-        if '=' in tempo_str:
-            bpm = tempo_str.split('=')[1].strip()
-            header_parts.append(f"tempo={bpm}")
-        else:
-            header_parts.append(f"tempo={tempo_str}")
-    
-    # Add header to tiny_parts if we have any metadata
-    if header_parts:
-        header = " ".join(header_parts)
-        tiny_parts.append(header)
+        tiny_parts.append(directives['time'])
     
     for i, (parsed, absolute_octave, large_leap) in enumerate(octave_results):
         # Build TinyNotation representation
@@ -157,41 +124,24 @@ def lily_to_tiny_notation(lily_snippet: str) -> ParseResult:
             else:
                 duration = last_duration  # Inherit from previous
             
-            # TinyNotation format for music21:
-            # - Lowercase (c, d, e) = octave 4 (middle C octave)
-            # - Uppercase (C, D, E) = octave 3
-            # - Apostrophes raise octave: c' = C5, c'' = C6
-            # - Commas are NOT supported by music21 - use uppercase instead
-            
-            pitch = parsed.pitch_letter  # 'c', 'd', 'e', etc.
+            # TinyNotation format uses lowercase letters with octave modifiers
+            # c = C4 (middle C octave)
+            # c' = C5, c'' = C6, c''' = C7
+            # c, = C3, c,, = C2
+            pitch = parsed.pitch_letter  # Keep lowercase!
             acc = tiny_notation_accidental(parsed.accidental)
             
-            # Determine case and apostrophes based on absolute octave
-            # Octave 3 or below: use uppercase + apostrophes for octave >3
-            # Octave 4 or above: use lowercase + apostrophes for octave >4
-            
-            if absolute_octave >= 4:
-                # Use lowercase base (octave 4)
-                pitch_with_case = pitch.lower()
-                octave_mod = "'" * (absolute_octave - 4)
+            # Calculate octave modifier relative to base octave 4
+            octave_diff = absolute_octave - 4
+            if octave_diff > 0:
+                octave_mod = "'" * octave_diff
+            elif octave_diff < 0:
+                octave_mod = "," * abs(octave_diff)
             else:
-                # Use uppercase base (octave 3), but this only works for octave 3
-                # For octaves below 3, we need a different approach
-                # music21 doesn't support octaves below 3 well in TinyNotation
-                # Workaround: use lowercase and warn
-                if absolute_octave < 3:
-                    pitch_with_case = pitch.lower()
-                    octave_mod = "'" * (absolute_octave - 4)  # Will be negative, not ideal
-                    # Actually, let's just default to octave 3 for now
-                    pitch_with_case = pitch.upper()
-                    octave_mod = ""
-                else:
-                    # Octave 3: use uppercase with no modifier
-                    pitch_with_case = pitch.upper()
-                    octave_mod = ""
+                octave_mod = ""
             
             # Build token: pitch + accidental + octave_modifier + duration
-            tiny_token = f"{pitch_with_case}{acc}{octave_mod}{duration}"
+            tiny_token = f"{pitch}{acc}{octave_mod}{duration}"
         
         tiny_parts.append(tiny_token)
         

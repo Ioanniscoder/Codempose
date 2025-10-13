@@ -12,7 +12,7 @@ def ql_to_lily_duration_string(ql: float) -> str:
     frac = Fraction(ql).limit_denominator(1024)
     try:
         dur = abjad.Duration(Fraction(frac, 4))
-        return dur.lilypond_duration_string
+        return dur.lilypond_duration_string()  # FIX: Added () to actually call the method
     except Exception:
         # Fall back: approximate with power-of-two base durations and dots
         candidates = []
@@ -86,6 +86,165 @@ def parse_lilypond_snippet(snippet: str) -> music21.stream.Part:
             part.append(element)
             if isinstance(element, music21.note.Note): last_pitch = element.pitch
     return part
+
+
+def _build_documentation_block(metadata: dict, source_file: str = None) -> str:
+    """
+    Build comprehensive LilyPond comment block documenting all stations.
+    
+    Includes:
+    - Original snippets (Station 1 & 2)
+    - Shorthand structure (Station 3)
+    - Programmatic voices (Station 4)
+    - Usage instructions
+    
+    Args:
+        metadata: Score metadata dictionary
+        source_file: Optional path to source study file
+        
+    Returns:
+        Formatted comment block string
+    """
+    lines = []
+    has_content = False
+    
+    # Add source file attribution if provided
+    if source_file:
+        from pathlib import Path
+        filename = Path(source_file).name
+        lines.extend([
+            "% ========================================",
+            f"% GENERATED FROM: {filename}",
+            "% ========================================",
+            "%",
+        ])
+        has_content = True
+    
+    # ========================================
+    # ORIGINAL SNIPPETS (Station 1 & 2)
+    # ========================================
+    original_snippets = metadata.get('original_snippets', {})
+    tinynotation_snippets = metadata.get('tinynotation_snippets', {})
+    
+    if original_snippets or tinynotation_snippets:
+        has_content = True
+        lines.extend([
+            "% ========================================",
+            "% ORIGINAL SNIPPETS (Station 1 & 2)",
+            "% ========================================",
+            "%",
+        ])
+        
+        # Show LilyPond snippets
+        if original_snippets:
+            lines.append("% LilyPond Format:")
+            for name, snippet in sorted(original_snippets.items()):
+                lines.append(f"%   {name}:")
+                lines.append(f"%     {snippet}")
+                lines.append("%")
+        
+        # Show TinyNotation equivalents
+        if tinynotation_snippets:
+            lines.append("% TinyNotation Format:")
+            for name, snippet in sorted(tinynotation_snippets.items()):
+                lines.append(f"%   {name}:")
+                lines.append(f"%     {snippet}")
+                lines.append("%")
+    
+    # Legacy support: original_input field
+    original_input = metadata.get('original_input', '')
+    if original_input and not original_snippets:
+        has_content = True
+        lines.extend([
+            "% ========================================",
+            "% ORIGINAL LILYPOND INPUT",
+            "% ========================================",
+            "%",
+        ])
+        for line in original_input.split('\n'):
+            lines.append(f"% {line}")
+        lines.append("%")
+    
+    # ========================================
+    # SHORTHAND STRUCTURE (Station 3)
+    # ========================================
+    voice_assignments = metadata.get('voice_assignments', {})
+    if voice_assignments:
+        has_content = True
+        lines.extend([
+            "% ========================================",
+            "% SHORTHAND STRUCTURE (Station 3)",
+            "% ========================================",
+            "%",
+        ])
+        for part_name, assignments in sorted(voice_assignments.items()):
+            if isinstance(assignments, dict):
+                for voice_name, expression in sorted(assignments.items()):
+                    lines.append(f"%   {part_name}.{voice_name}: {expression}")
+            else:
+                lines.append(f"%   {part_name}: {assignments}")
+        lines.append("%")
+    
+    # ========================================
+    # VOICE TRACKING (Station 4 - Detailed)
+    # ========================================
+    voice_tracking = metadata.get('voice_tracking', {})
+    if voice_tracking:
+        has_content = True
+        lines.extend([
+            "% ========================================",
+            "% VOICE TRACKING (Station 4 - Detailed)",
+            "% ========================================",
+            "%",
+        ])
+        for voice_id, track_data in sorted(voice_tracking.items()):
+            transformation = track_data.get('transformation', 'unknown')
+            description = track_data.get('description', '')
+            event_count = track_data.get('events', 0)
+            source = track_data.get('source', '')
+            lines.append(f"% {voice_id}:")
+            lines.append(f"%   Transformation: {transformation}")
+            lines.append(f"%   Description: {description}")
+            lines.append(f"%   Events: {event_count}")
+            if source:
+                lines.append(f"%   Source: {source}")
+            lines.append("%")
+    
+    # ========================================
+    # PROGRAMMATIC VOICES (Station 4)
+    # ========================================
+    programmatic_voices = metadata.get('programmatic_voices', {})
+    if programmatic_voices:
+        has_content = True
+        lines.extend([
+            "% ========================================",
+            "% PROGRAMMATIC VOICES (Station 4)",
+            "% ========================================",
+            "%",
+        ])
+        for voice_name, voice_data in sorted(programmatic_voices.items()):
+            lily_notation = voice_data.get('lilypond', '')
+            lines.append(f"% {voice_name}:")
+            lines.append(f"%   {lily_notation}")
+            lines.append("%")
+    
+    # ========================================
+    # USAGE INSTRUCTIONS
+    # ========================================
+    if has_content:
+        lines.extend([
+            "% ========================================",
+            "% HOW TO USE",
+            "% ========================================",
+            "% - Copy any snippet above into a new study file",
+            "% - Use shorthand expressions as templates",
+            "% - Programmatic voices can be edited or transformed",
+            "% ========================================",
+            "",
+        ])
+    
+    return "\n".join(lines) if has_content else ""
+
 
 def engrave_with_abjad(score_data: dict, output_basename: str, source_file: str = None):
     print(f"🎶 Engraving '{score_data.get('metadata', {}).get('title', '')}'...")
@@ -172,6 +331,10 @@ def engrave_with_abjad(score_data: dict, output_basename: str, source_file: str 
                 dur_str = ql_to_lily_duration_string(ql)
                 if ev.get('type') == 'rest':
                     part_tokens.append(f"r{dur_str}")
+                elif ev.get('type') == 'barline':
+                    # Handle bar line markers
+                    style = ev.get('style', '||')
+                    part_tokens.append(f"\\bar \"{style}\"")
                 elif ev.get('type') == 'chord':
                     # Handle chord events - format as <pitch1 pitch2 pitch3>duration
                     chord_pitches = []
@@ -182,13 +345,14 @@ def engrave_with_abjad(score_data: dict, output_basename: str, source_file: str 
                         if alter == 1: acc = 'is'
                         elif alter == -1: acc = 'es'
                         octave = pitch_data.get('octave', 4)
-                        if octave == 4:
+                        # LilyPond absolute: octave 3 is default (no markers)
+                        if octave == 3:
                             pitch_text = f"{step}{acc}"
-                        elif octave > 4:
-                            marks = "'" * (octave - 4)
+                        elif octave > 3:
+                            marks = "'" * (octave - 3)
                             pitch_text = f"{step}{acc}{marks}"
                         else:
-                            marks = "," * (4 - octave)
+                            marks = "," * (3 - octave)
                             pitch_text = f"{step}{acc}{marks}"
                         chord_pitches.append(pitch_text)
                     chord_str = f"<{' '.join(chord_pitches)}>{dur_str}"
@@ -200,13 +364,15 @@ def engrave_with_abjad(score_data: dict, output_basename: str, source_file: str 
                     if alter == 1: acc = 'is'
                     elif alter == -1: acc = 'es'
                     octave = ev.get('octave', 4)
-                    if octave == 4:
+                    # LilyPond absolute: octave 3 is default (no markers)
+                    # c = C3, c' = C4, c'' = C5, c, = C2, c,, = C1
+                    if octave == 3:
                         pitch_text = f"{step}{acc}"
-                    elif octave > 4:
-                        marks = "'" * (octave - 4)
+                    elif octave > 3:
+                        marks = "'" * (octave - 3)
                         pitch_text = f"{step}{acc}{marks}"
                     else:
-                        marks = "," * (4 - octave)
+                        marks = "," * (3 - octave)
                         pitch_text = f"{step}{acc}{marks}"
                     part_tokens.append(f"{pitch_text}{dur_str}")
             body = " ".join(part_tokens)
@@ -238,18 +404,8 @@ def engrave_with_abjad(score_data: dict, output_basename: str, source_file: str 
         staves.append(staff_content)
     score_block = f"<<\n{''.join(staves)}\n>>" if len(staves) > 1 else staves[0]
 
-    # Build comment section with original LilyPond snippets if available
-    comment_section = ""
-    original_input = score_data.get('metadata', {}).get('original_input', '')
-    if original_input:
-        comment_section = f"""% ========================================
-% ORIGINAL LILYPOND INPUT (for reference)
-% ========================================
-% {original_input.replace(chr(10), chr(10) + '% ')}
-%
-% ========================================
-
-"""
+    # Build comprehensive documentation block
+    comment_section = _build_documentation_block(metadata, source_file)
 
     ly_content = f'\\version "2.24.1"\n{comment_section}\\header {{ title = "{title}" }}\n\\score {{\n  {score_block}\n  \\layout {{ }}\n  \\midi {{ }}\n}}'
     ly_path.write_text(ly_content)

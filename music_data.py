@@ -87,3 +87,25 @@ def data_to_part(events: list, metadata: dict = None) -> music21.stream.Part:
             continue
         part.append(el)
     return part
+
+
+def build_lilypond_file(score_data: dict, output_basename: str, source_file: str = None):
+    """
+    Build and write LilyPond file with documentation.
+    
+    This is a wrapper around engrave_with_abjad() for backward compatibility
+    with tenth.py's expected interface.
+    
+    Args:
+        score_data: Complete score data dictionary
+        output_basename: Base name for output file (e.g., 'tenth')
+        source_file: Optional path to source Python file for attribution
+    """
+    from project_template import engrave_with_abjad
+    from pathlib import Path
+    
+    # Extract basename without extension
+    basename = Path(output_basename).stem
+    
+    # Delegate to existing function
+    engrave_with_abjad(score_data, basename, source_file=source_file)

@@ -1,0 +1,12 @@
+Hello! This is a test file created by GitHub Copilot.
+
+Current timestamp: October 7, 2025
+Workspace: Codempose
+Purpose: Demonstrating file creation and reading
+
+This file contains:
+- Multiple lines of text
+- Formatted content
+- A simple demonstration of file I/O operations
+
+End of test file.

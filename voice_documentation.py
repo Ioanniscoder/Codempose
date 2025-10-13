@@ -19,10 +19,11 @@ def register_and_document_voice(name, events, voice_lookup, metadata):
     if 'programmatic_voices' not in metadata:
         metadata['programmatic_voices'] = {}
     
-    # Convert events to LilyPond notation for documentation
-    lily_notation = events_to_lily(events)
+    # Convert events to LilyPond notation for documentation (with metadata context)
+    lily_notation = events_to_lily(events, metadata)
     
     metadata['programmatic_voices'][name] = {
         'events': events,
         'lilypond': lily_notation
     }
+

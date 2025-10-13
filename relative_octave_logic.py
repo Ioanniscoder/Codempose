@@ -30,15 +30,21 @@ def parse_base_pitch(base_str: str) -> Tuple[str, int]:
     
     Returns:
         Tuple of (pitch_letter, octave)
-        Octave numbering: c' = C4 (middle C), c'' = C5, c = C3, c,, = C1
+        Octave numbering: c' = C4 (middle C), c'' = C5, c = C4, c,, = C2
+        
+        IMPORTANT: In LilyPond, \relative c means "relative to C4" (middle C octave),
+        not C3. This matches LilyPond's convention where the default octave for 
+        \relative (without markers) is octave 4.
     
     Examples:
         >>> parse_base_pitch("c'")
-        ('c', 4)
-        >>> parse_base_pitch("c''")
         ('c', 5)
+        >>> parse_base_pitch("c''")
+        ('c', 6)
+        >>> parse_base_pitch("e")
+        ('e', 4)
         >>> parse_base_pitch("e,,")
-        ('e', 1)
+        ('e', 2)
     """
     # Extract pitch letter
     pitch = base_str[0]
@@ -47,8 +53,9 @@ def parse_base_pitch(base_str: str) -> Tuple[str, int]:
     up_markers = base_str.count("'")
     down_markers = base_str.count(",")
     
-    # Base octave: c (no markers) = C3, c' = C4 (middle C)
-    base_octave = 3
+    # Base octave: c (no markers) = C4 (middle C octave), c' = C5, c'' = C6
+    # This matches LilyPond's convention where \relative c defaults to C4
+    base_octave = 4
     octave = base_octave + up_markers - down_markers
     
     return (pitch, octave)
@@ -160,35 +167,45 @@ def calculate_relative_octave(prev_midi: int, current_pitch: str, current_accide
         # Negate matches so True (matches) sorts before False (doesn't match)
         candidates.append((abs_interval, not matches_scale_direction, is_downward, test_octave, test_midi))
     
-    # LilyPond rule: 
-    # 1. Only consider options within a perfect 5th (≤7 semitones)
-    # 2. Choose smallest chromatic interval
-    # 3. SPECIAL CASE: When one option is a 4th (5) and another is a 5th (7),
-    #    these are musically related (inversions), so use scale direction as tiebreaker
-    # 4. When intervals are exactly equal, prefer motion matching scale direction
-    # 5. When still tied, prefer upward motion
+    # LilyPond rule (CORRECTED after testing):
+    # 1. Choose smallest chromatic interval (≤ perfect 4th = 5 semitones)
+    # 2. When intervals are equal AND one of them is a tritone (6 semitones),
+    #    PREFER UPWARD MOTION (not scale direction!)
+    # 3. For non-tritone ties, use scale direction as tiebreaker
+    # 4. Final tiebreaker: prefer upward motion
+    #
+    # Key insight: The tritone (augmented 4th / diminished 5th) is a special case
+    # because it's exactly halfway between octaves. LilyPond appears to resolve
+    # tritone ambiguity by preferring upward motion, which is more natural for
+    # melodic continuation.
     
-    # Filter to options ≤ 7 semitones
-    valid_candidates = [c for c in candidates if c[0] <= 7]
+    # Filter to options ≤ 5 semitones (perfect 4th)
+    # Note: We use ≤5 as the primary filter, but will consider ≤7 as fallback
+    within_fourth = [c for c in candidates if c[0] <= 5]
+    within_fifth = [c for c in candidates if c[0] <= 7]
     
-    if not valid_candidates:
-        # Fallback: if nothing within 7, use all candidates
+    if within_fourth:
+        # Prefer options within a perfect 4th
+        valid_candidates = within_fourth
+    elif within_fifth:
+        # Fallback: use options within a perfect 5th
+        valid_candidates = within_fifth
+    else:
+        # Last resort: use all candidates
         valid_candidates = candidates
     
-    # Check if we have the special 4th/5th case (intervals 5 and 7)
+    # Check if we have a tritone (6 semitones) - special case
     intervals = sorted(set(c[0] for c in valid_candidates))
-    has_fourth_fifth_pair = (5 in intervals and 7 in intervals and len(intervals) == 2)
+    has_tritone = 6 in intervals
     
-    if has_fourth_fifth_pair:
-        # Special case: 4th vs 5th
-        # When one option is a 4th (5 semitones) and another is a 5th (7 semitones),
-        # these are musically related (inversions). Use scale direction as the PRIMARY
-        # tiebreaker, then smallest interval, then prefer upward motion.
+    if has_tritone and len([c for c in valid_candidates if c[0] == 6]) >= 2:
+        # Tritone ambiguity: multiple options at 6 semitones
+        # LilyPond resolves this by preferring UPWARD motion
         # Tuple: (abs_interval, not matches_scale_direction, is_downward, test_octave, test_midi)
-        ff_candidates = [c for c in valid_candidates if c[0] in (5, 7)]
-        # Sort by: scale direction match (x[1]), then smallest interval (x[0]), then upward (x[2])
-        ff_candidates.sort(key=lambda x: (x[1], x[0], x[2]))
-        best_abs_interval, _, _, best_octave, best_midi = ff_candidates[0]
+        # Sort by: smallest interval (x[0]), then upward motion (x[2])
+        # This makes upward preferred over scale direction for tritones
+        valid_candidates.sort(key=lambda x: (x[0], x[2]))
+        best_abs_interval, _, _, best_octave, best_midi = valid_candidates[0]
     else:
         # Normal case: smallest interval, then scale direction, then upward
         valid_candidates.sort(key=lambda x: (x[0], x[1], x[2]))

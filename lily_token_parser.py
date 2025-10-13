@@ -119,9 +119,13 @@ def parse_token(token: str) -> ParsedToken:
             warnings=warnings
         )
     
-    # Special case: German note names (es, as, ases, eses, etc.)
+    # Special case: Complete note names (German notes + localized names like bmol)
     # These are complete pitch names, not pitch + accidental
-    german_notes = {
+    # IMPORTANT: Check these BEFORE the generic regex to avoid ambiguity
+    complete_note_names = {
+        # Localized names (must come first to avoid b+mol parsing)
+        'bmol': ('b', 'flat'),
+        # German note names
         'eses': ('e', 'double-flat'),
         'es': ('e', 'flat'),
         'ases': ('a', 'double-flat'),
@@ -133,11 +137,14 @@ def parse_token(token: str) -> ParsedToken:
         'ges': ('g', 'flat'),
     }
     
-    # Try to match German note names first
-    for german_name, (base_pitch, accidental) in german_notes.items():
-        if token.startswith(german_name):
-            # Extract everything after the German note name
-            remainder = token[len(german_name):]
+    # Try to match complete note names first (prioritize longest matches)
+    # Sort by length descending to match 'bmol' before 'b'
+    sorted_note_names = sorted(complete_note_names.items(), key=lambda x: len(x[0]), reverse=True)
+    
+    for note_name, (base_pitch, accidental) in sorted_note_names:
+        if token.startswith(note_name):
+            # Extract everything after the complete note name
+            remainder = token[len(note_name):]
             # Parse octave markers and duration from remainder
             octave_duration_match = re.match(r"^([',]*)(\d*\.?)$", remainder)
             if octave_duration_match:
@@ -289,8 +296,9 @@ def pitch_to_midi(pitch_letter: str, accidental: str, octave: int) -> int:
     base = pitch_base.get(pitch_letter, 0)
     acc_offset = accidental_offset.get(accidental, 0)
     
-    # MIDI note number = base + accidental + (octave * 12)
-    # Middle C (C4) = 60
+    # MIDI note number = base + accidental + ((octave + 1) * 12)
+    # This formula compensates for the octave numbering system used elsewhere
+    # Middle C (C4) = 60 = 0 + 0 + ((4+1) * 12) = 60 ✓
     midi = base + acc_offset + ((octave + 1) * 12)
     
     return midi
