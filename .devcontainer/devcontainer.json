@@ -27,12 +27,21 @@
     "vscode": {
       "extensions": [
         "GitHub.copilot",
-        "GitHub.copilot-chat"
+        "GitHub.copilot-chat",
+        "fernandoescolar.vscode-solution-explorer"
       ],
       "settings": {
         "github.copilot.enable": {
           "*": true
-        }
+        },
+        "explorer.decorations.badges": true,
+        "workbench.editor.decorations.badges": true,
+       "terminal.integrated.defaultProfile.linux": "bash",
+       "terminal.integrated.profiles.linux": {
+         "bash": {
+           "path": "/bin/bash"
+         }
+       }
       }
     }
   }

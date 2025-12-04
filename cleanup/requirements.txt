@@ -1,0 +1,12 @@
+# Codempose Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Music notation and engraving
+abjad>=3.19
+music21>=9.1.0
+
+# LilyPond parsing
+python-ly>=0.9.7
+
+# Testing (optional, for development)
+pytest>=8.0.0

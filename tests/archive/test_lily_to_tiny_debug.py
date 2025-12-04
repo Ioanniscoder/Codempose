@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Debug script to test lily_to_tiny conversion."""
 
+# Ensure repo root is on path for imports
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 from lily_to_tiny import lily_to_tiny_notation
 
 lily_string = r"\relative e { \time 6/4 \key c \major \tempo 4=90 e2 bmol4 c2 r4 | e2 f#4 e2 r4 | b2. f'2. | e2. c2. | e2 b2 c2 }"

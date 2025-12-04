@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE score-partwise  PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<!--
+╔════════════════════════════════════════════════════════════════════════════╗
+║ CODEMPOSE MUSICXML EXPORT - STRUCTURE EXPLANATION                          ║
+╔════════════════════════════════════════════════════════════════════════════╗
+║                                                                            ║
+║ This MusicXML file contains all your musical data correctly.              ║
+║                                                                            ║
+║ STRUCTURE: Each voice is exported as a separate staff (Part).             ║
+║ This is a reliable approach that preserves all musical content.           ║
+║                                                                            ║
+║ WHY SEPARATE STAVES?                                                      ║
+║ - The music21 library has limitations with multi-voice staff grouping     ║
+║ - This approach ensures 100% data integrity and reliability               ║
+║ - All notes, rhythms, and articulations are preserved correctly           ║
+║                                                                            ║
+║ MUSESCORE WORKFLOW - COMBINING VOICES:                                    ║
+║                                                                            ║
+║ Use the "Implode" tool to merge staves into multi-voice staves:          ║
+║                                                                            ║
+║ 1. Select the measures from BOTH staves you want to combine               ║
+║    (Example: Click first measure of Soprano, Shift+Click last of Alto)   ║
+║                                                                            ║
+║ 2. Go to: Tools → Implode                                                 ║
+║                                                                            ║
+║ 3. Result: Lower staff moves to Voice 2 on upper staff                    ║
+║    (Stem directions adjust automatically)                                 ║
+║                                                                            ║
+║ 4. Delete the now-empty lower staff                                       ║
+║                                                                            ║
+║ Repeat for other voice pairs (Tenor + Bass, etc.)                         ║
+║                                                                            ║
+║ ALTERNATIVE: Use "Hide Empty Staves" (Format → Style → Score)             ║
+║                                                                            ║
+║ This workflow leverages Codempose's programmatic power while using        ║
+║ MuseScore for final layout—the best of both worlds!                       ║
+║                                                                            ║
+╚════════════════════════════════════════════════════════════════════════════╝
+-->
+
+<score-partwise version="4.0">
+  <work>
+    <work-title>Regression Test: Simple Baseline</work-title>
+  </work>
+  <movement-title>Regression Test: Simple Baseline</movement-title>
+  <identification>
+    <creator type="composer">Codempose Test Suite</creator>
+    <encoding>
+      <encoding-date>2025-10-20</encoding-date>
+      <software>music21 v.9.7.1</software>
+    </encoding>
+  </identification>
+  <defaults>
+    <scaling>
+      <millimeters>7</millimeters>
+      <tenths>40</tenths>
+    </scaling>
+  </defaults>
+  <part-list>
+    <score-part id="P542cd7afd20905f3dff28fd87a0c2c18">
+      <part-name>Melody</part-name>
+    </score-part>
+    <score-part id="P872e8cfac8fe0a070818a522061089d8">
+      <part-name>Bass</part-name>
+    </score-part>
+  </part-list>
+  <!--=========================== Part 1 ===========================-->
+  <part id="P542cd7afd20905f3dff28fd87a0c2c18">
+    <!--========================= Measure 1 ==========================-->
+    <measure implicit="no" number="1">
+      <attributes>
+        <divisions>10080</divisions>
+        <time>
+          <beats>4</beats>
+          <beat-type>4</beat-type>
+        </time>
+        <clef>
+          <sign>G</sign>
+          <line>2</line>
+        </clef>
+      </attributes>
+      <note print-object="no" print-spacing="yes">
+        <rest measure="yes" />
+        <duration>40320</duration>
+      </note>
+    </measure>
+    <!--========================= Measure 2 ==========================-->
+    <measure implicit="no" number="2">
+      <note print-object="no" print-spacing="yes">
+        <rest measure="yes" />
+        <duration>40320</duration>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+      </barline>
+    </measure>
+  </part>
+  <!--=========================== Part 2 ===========================-->
+  <part id="P872e8cfac8fe0a070818a522061089d8">
+    <!--========================= Measure 1 ==========================-->
+    <measure implicit="no" number="1">
+      <attributes>
+        <divisions>10080</divisions>
+        <time>
+          <beats>4</beats>
+          <beat-type>4</beat-type>
+        </time>
+        <clef>
+          <sign>G</sign>
+          <line>2</line>
+        </clef>
+      </attributes>
+      <note>
+        <rest measure="yes" />
+        <duration>40320</duration>
+      </note>
+    </measure>
+    <!--========================= Measure 2 ==========================-->
+    <measure implicit="no" number="2">
+      <note>
+        <rest measure="yes" />
+        <duration>40320</duration>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+      </barline>
+    </measure>
+  </part>
+</score-partwise>

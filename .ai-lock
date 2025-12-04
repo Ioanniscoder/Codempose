@@ -1,0 +1,158 @@
+# AI ASSISTANT LOCK FILE
+# Created: October 19, 2025
+# Purpose: Prevent regressions in working code
+#
+# GOLDEN RULE: "Duplicate files typically tell you that you should ONLY touch the active code base."
+#              - If a file exists in multiple places, it's archived/referenced
+#              - Only edit the PRIMARY/ACTIVE version
+#              - Never "sync" copies (they drift for a reason - history)
+#
+# HOW TO USE THIS FILE:
+# 1. Files listed here should NOT be modified without explicit user request
+# 2. Each entry explains WHY it's locked
+# 3. If modification needed, user must REMOVE from this list first
+# 4. If you see duplicates (backup/, cleanup/, OLD/, *.backup) → Don't touch ANY of them
+
+# ============================================================================
+# ACTIVE CODEBASE LOCATIONS (Edit these if needed)
+# ============================================================================
+
+# Primary files (in project root):
+#   generate_study.py
+#   src/*.py
+#   studies/*.py (generated, can recreate)
+#   tests/*.py
+
+# Archives (NEVER EDIT):
+#   backup/
+#   cleanup/
+#   outputs/OLD/
+#   outputs/TEMPLATES/
+#   *.backup files
+#   IMPROVED_STUDY_TEMPLATE.py (reference only)
+
+# ============================================================================
+# LOCKED FILES (Complete and working - don't modify)
+# ============================================================================
+
+generate_study.py
+# Status: COMPLETE (620 lines) - ACTIVE VERSION in project root
+# Why locked: Template improvements done, tested, working
+# Has: Creative examples, shortened docstring, station architecture
+# Last modified: 2025-10-19
+# If user wants changes: Ask what specifically, show diff first
+# Note: Other copies exist in backup/, cleanup/, src/lib/, studies/, outputs/TEMPLATES/
+#       → Those are archives/references. ONLY edit this root version.
+
+# ============================================================================
+# REFERENCE FILES (Read-only, don't edit)
+# ============================================================================
+
+IMPROVED_STUDY_TEMPLATE.py
+# Purpose: Shows template structure for documentation
+# Not active code - for reference only
+
+generate_study.py.backup
+# Purpose: Original 909-line version before improvements
+# Historical reference - don't delete or modify
+
+# ============================================================================
+# ARCHIVE DIRECTORIES (Never touch)
+# ============================================================================
+
+# backup/          - Old test files from October 4
+# cleanup/         - Refactoring history and old implementations  
+# outputs/OLD/     - Generated outputs from studies 1-21 (before template changes)
+# outputs/TEMPLATES/ - Template snapshots
+
+# ============================================================================
+# FRAMEWORK CORE (Stable - modify only with explicit user request)
+# ============================================================================
+
+# Note: .ly header fix requires modifying ONE of these:
+# src/lilypond_engraver.py OR src/converter.py
+# This is ALLOWED because it's the current task
+# After fix, add the modified file to this lock list
+
+src/lilypond_parser.py
+# Why locked: Parsing logic stable, tested across 21 studies
+
+src/score_builder.py
+# Why locked: Blueprint assembly working correctly
+
+src/project_template.py
+# Why locked: Pipeline orchestration stable
+
+# ============================================================================
+# DOCUMENTATION (CURRENT STATE)
+# ============================================================================
+
+DOCUMENTATION/TEMPLATE_IMPROVEMENT_SUMMARY.md
+# Why locked: Complete record of template changes
+
+DOCUMENTATION/IMPROVED_TEMPLATE_ANALYSIS.md
+# Why locked: Detailed pattern analysis
+
+DOCUMENTATION/LILYPOND_HEADER_ISSUE.md
+# Why locked: Investigation for current task
+# After fix: Update status, don't rewrite
+
+DOCUMENTATION/HOW_TO_WORK_WITH_AI_ASSISTANTS.md
+# Why locked: Meta-guidance for working with AI
+# Can be improved with user's additional insights
+
+# ============================================================================
+# STUDY FILES (GENERATED - Can regenerate if needed)
+# ============================================================================
+
+studies/ninetyninth.py
+# Status: Test file (can be deleted/regenerated)
+# Why noted: Used for verification testing
+
+# ============================================================================
+# CONFIGURATION (HAND-TUNED)
+# ============================================================================
+
+requirements.txt
+# Why locked: Dependencies stable, tested in devcontainer
+
+.devcontainer/devcontainer.json
+# Why locked: Environment working, don't break it
+
+# ============================================================================
+# WHAT IS *NOT* LOCKED (Can be modified for current task)
+# ============================================================================
+
+# src/lilypond_engraver.py (or whatever writes .ly headers)
+# → This is the CURRENT TASK - fixing .ly header format
+# → After fix is working, ADD it to lock list above
+
+# studies/*.py (except ninetyninth.py used for testing)
+# → Generated files, can be recreated
+
+# outputs/*.ly, *.pdf, *.midi, *.musicxml
+# → Generated outputs, can be recreated
+
+# ============================================================================
+# SESSION WORKFLOW
+# ============================================================================
+
+# 1. AI reads this file at start of session
+# 2. AI confirms which files are locked
+# 3. User requests a change
+# 4. AI checks if target file is locked
+# 5. If locked: Ask user to confirm and show diff before applying
+# 6. If unlocked: Proceed with change
+# 7. After successful change: User may add file to lock list
+
+# ============================================================================
+# VERIFICATION COMMAND
+# ============================================================================
+
+# Run this after any AI session to verify template integrity:
+#   ./verify_template.sh
+#
+# If that doesn't exist yet, run:
+#   python3 generate_study.py 99 "Test"
+#   cd studies && python3 ninetyninth.py
+#   grep -q "SOURCE_THEME_LILY" generate_study.py && echo "✅ Template OK"

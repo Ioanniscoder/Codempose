@@ -47,8 +47,8 @@ def extract_directives(snippet: str) -> Dict[str, str]:
     if clef_match:
         directives['clef'] = clef_match.group(1)
     
-    # Extract tempo: \tempo 4 = 120
-    tempo_match = re.search(r'\\tempo\s+(\d+)\s*=\s*(\d+)', snippet)
+    # Extract tempo: \tempo 4 = 120 or \tempo "Andante" 4 = 120
+    tempo_match = re.search(r'\\tempo\s+(?:"[^"]*"\s+)?(\d+)\s*=\s*(\d+)', snippet)
     if tempo_match:
         directives['tempo'] = f"{tempo_match.group(1)} = {tempo_match.group(2)}"
     
@@ -95,41 +95,51 @@ def tokenize_body(snippet: str) -> List[str]:
         ['e2', 'bmol4', 'c2', 'r4']
     
     Notes:
-        - Strips directives (\time, \key, etc.)
-        - Removes braces, \relative, and structural markers
+        - Uses inclusion-list (allow-list) approach: only recognizes known musical tokens
+        - Splits preamble from note body using pattern detection
         - Preserves accidentals (fis, bes, bmol, f#, etc.)
         - Preserves durations (4, 8, 16, 2., etc.)
         - Preserves octave markers (', ,)
+        - Warns about unrecognized text
     """
-    # Step 1: Remove directives
-    body = snippet
+    # Step 1: Extract body content from within { ... } if present
+    brace_match = re.search(r'\{([^}]+)\}', snippet)
+    if brace_match:
+        body = brace_match.group(1)
+    else:
+        body = snippet
     
-    # Remove \relative c' { and closing }
-    body = re.sub(r'\\relative\s+[a-g][\'|,]*\s*\{', '', body)
+    # Step 2: Find where the NOTE SEQUENCE begins
+    # Notes appear as continuous sequences, not isolated letters in directives
+    # Pattern: Find the first occurrence of a note-like token that starts a SERIES
+    # Look for: note followed by whitespace and another note/rest/chord/barline
     
-    # Remove other directives
-    body = re.sub(r'\\time\s+\d+/\d+', '', body)
-    body = re.sub(r'\\key\s+[a-g](?:es|is)?\s+\\(?:major|minor)', '', body)
-    body = re.sub(r'\\clef\s+"?[a-z]+"?', '', body)
-    body = re.sub(r'\\tempo\s+\d+\s*=\s*\d+', '', body)
+    note_sequence_start = re.search(
+        r"(?:^|\s)([a-gr](?:isis|ises|eses|is|es|bmol|mol|#|b)?['',]*\d*\.?|<[^>]+>\d*\.?)\s+(?=[a-gr<|])",
+        body
+    )
     
-    # Remove bare braces (but preserve chord delimiters like <c e g>)
-    body = re.sub(r'(?<![<>])\{|\}(?![<>])', '', body)
+    if note_sequence_start:
+        # Split: everything before is preamble, everything from here is notes
+        split_pos = note_sequence_start.start()
+        preamble = body[:split_pos]
+        note_body = body[split_pos:]
+    else:
+        # Fallback: try to find first note token even if not in series
+        first_note = re.search(
+            r"(?:^|\s)([a-gr](?:isis|ises|eses|is|es|bmol|mol|#|b)?['',]*\d*\.?|<[^>]+>\d*\.?)",
+            body
+        )
+        if first_note:
+            split_pos = first_note.start()
+            preamble = body[:split_pos]
+            note_body = body[split_pos:]
+        else:
+            preamble = body
+            note_body = ""
     
-    # Step 2: Tokenize
-    # Pattern matches:
-    # - Rests: r4, r8., r2
-    # - Notes: c4, fis8, bmol2, c'4, d,,2
-    # - Dotted durations: c4., r8.
-    # - Chords: <c e g>4
-    
-    # Token pattern: 
-    # - Note/rest letter: [a-gr]
-    # - Optional accidental: (is|es|eses|isis|bmol|mol|#|b)?
-    # - Optional octave markers: [',]*
-    # - Optional duration: \d+\.?
-    # OR
-    # - Chord: <...>duration
+    # Step 3: Tokenize the NOTE BODY using INCLUSION-LIST (allow-list)
+    # Only recognize known musical tokens; ignore everything else
     
     # Pattern explanation:
     # German notes need special handling:
@@ -139,6 +149,8 @@ def tokenize_body(snippet: str) -> List[str]:
     
     token_pattern = r'''
         <[^>]+>\d*\.?                    # Chords: <c e g>4
+        |
+        \|                               # Bar lines
         |
         (?:heses|ces|eses|ases|des|fes)  # D/F/other + es (always combined)
         [',]*\d*\.?                      # Octave markers and duration
@@ -152,10 +164,37 @@ def tokenize_body(snippet: str) -> List[str]:
         [',]*\d*\.?                      # Octave markers and duration
     '''
     
-    tokens = re.findall(token_pattern, body, re.VERBOSE)
+    tokens = re.findall(token_pattern, note_body, re.VERBOSE)
     
     # Filter out empty strings and whitespace
     tokens = [t.strip() for t in tokens if t.strip()]
+    
+    # Step 4: Detect unrecognized text in the NOTE BODY (for debugging)
+    # Remove all matched tokens to see what's left
+    temp_note_body = note_body
+    for token in tokens:
+        # Escape special regex characters in the token
+        escaped_token = re.escape(token)
+        temp_note_body = re.sub(escaped_token, '', temp_note_body, count=1)
+    
+    # Remove whitespace
+    temp_note_body = temp_note_body.strip()
+    
+    # Report any unrecognized text in note body
+    if temp_note_body:
+        print(f"⚠️  WARNING: Unrecognized text in note body (ignored): '{temp_note_body}'")
+    
+    # Also check if preamble contains unexpected non-directive text
+    temp_preamble = preamble
+    temp_preamble = re.sub(r'\\relative\s+[a-g][\'|,]*', '', temp_preamble)
+    temp_preamble = re.sub(r'\\time\s+\d+/\d+', '', temp_preamble)
+    temp_preamble = re.sub(r'\\key\s+[a-g](?:es|is)?\s+\\(?:major|minor)', '', temp_preamble)
+    temp_preamble = re.sub(r'\\clef\s+"?[a-z]+"?', '', temp_preamble)
+    temp_preamble = re.sub(r'\\tempo\s+(?:"[^"]*"\s+)?\d+\s*=\s*\d+', '', temp_preamble)
+    temp_preamble = temp_preamble.strip()
+    
+    if temp_preamble:
+        print(f"⚠️  WARNING: Unrecognized text in preamble (ignored): '{temp_preamble}'")
     
     return tokens
 

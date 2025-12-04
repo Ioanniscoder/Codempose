@@ -3,8 +3,8 @@ import shutil
 from pathlib import Path
 import pytest
 
-# Ensure repo root is importable
-sys.path.insert(0, '/workspaces/Codempose')
+# Add src/ to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 import project_template
 

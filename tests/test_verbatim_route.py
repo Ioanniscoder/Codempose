@@ -1,5 +1,9 @@
+import sys
 import subprocess
 from pathlib import Path
+
+# Add src/ to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 
 def test_verbatim_route_creates_ly_with_header(tmp_path):

@@ -1,7 +1,3 @@
-ipython
-pytest
-black
-flake8
-music21
-abjad
-mypy
+music21>=8.0
+abjad>=3.0
+# Add other project dependencies here as needed

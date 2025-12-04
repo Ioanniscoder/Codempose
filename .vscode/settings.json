@@ -18,5 +18,6 @@
   "github.copilot.chat.runCommand.enabled": true,
   "github.copilot.editor.enableAutoCompletions": true,
    "github.copilot.chat.executeCodeEnabled": true,
-  "github.copilot.chat.mcp.enabled": true
+  "github.copilot.chat.mcp.enabled": true,
+  "vssolution.solutionExplorerIcons": "current-theme"
 }

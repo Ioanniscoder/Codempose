@@ -1,6 +1,9 @@
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path.cwd()))
+
+# Add src/ to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
 import project_template as pt
 
 

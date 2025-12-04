@@ -1,0 +1,112 @@
+"""Seventeenth study file - Advanced Harmonization Test.
+
+This study demonstrates the Harmonic Fitting Engine with a more complex
+progression - the classic "50s progression" (I - vi - IV - V).
+
+This tests the engine's ability to handle minor chords (vi) and
+longer progressions with more harmonic changes.
+"""
+
+# ============================================================================
+# STATION 1: LILYPOND SNIPPETS
+# ============================================================================
+
+# Extended melody for richer harmonization
+MELODY_LILY = r"""
+\relative c'' {
+    \time 4/4
+    \key c \major
+    \tempo 4=100
+    c4 e4 g4 e4 |
+    a4 g4 f4 e4 |
+    f4 d4 e4 c4 |
+    d4 c4 b4 c4 |
+    c1
+}
+""".strip()
+
+# Classic "50s progression" - used in countless pop songs
+PROGRESSION_STRING = "I - vi - IV - V - I"
+KEY = "C"
+
+TITLE = "50s Progression Demo"
+COMPOSER = "Harmonic Engine"
+
+
+# ============================================================================
+# STATION 2: REAL-TIME VALIDATION
+# ============================================================================
+# (Automatic via LilyPond parser)
+
+
+# ============================================================================
+# STATION 3: HARMONIZATION
+# ============================================================================
+
+def build_score_data():
+    """
+    Build score data with 50s progression harmonization.
+    
+    This demonstrates:
+    - Longer progression (5 chords)
+    - Minor chord handling (vi = A minor)
+    - More complex harmonic rhythm
+    
+    Returns:
+        dict: Score data with melody and generated bass parts
+    """
+    from lilypond_parser import parse_lilypond_to_data
+    from music_data import data_to_part, part_to_data
+    from harmonic_engine import harmonize_melody
+    
+    print("\n" + "="*70)
+    print("SEVENTEENTH STUDY: 50s PROGRESSION")
+    print("="*70)
+    print(f"\nKey: {KEY} major")
+    print(f"Progression: {PROGRESSION_STRING}")
+    print("This is the classic 'doo-wop' progression!\n")
+    
+    # Parse melody
+    melody_data = parse_lilypond_to_data(MELODY_LILY, part_name='Melody')
+    melody_part = data_to_part(melody_data['parts']['Melody'], melody_data.get('metadata'))
+    
+    # Apply 50s progression
+    harmonized_score = harmonize_melody(
+        melody_part=melody_part,
+        progression_string=PROGRESSION_STRING,
+        key=KEY,
+        harmonic_rhythm="auto"
+    )
+    
+    # Convert to score_data
+    melody_events = part_to_data(harmonized_score.parts[0])
+    bass_events = part_to_data(harmonized_score.parts[1])
+    
+    score_data = {
+        'metadata': {
+            'title': TITLE,
+            'composer': COMPOSER,
+            'time_signature': '4/4',
+            'key_signature': {'tonic': 'c', 'mode': 'major'},
+            'tempo': {'beat_duration': 4, 'bpm': 100}
+        },
+        'parts': {
+            'Melody': melody_events,
+            'Bass': bass_events
+        }
+    }
+    
+    print("\n" + "="*70)
+    print("HARMONIZATION COMPLETE - Listen to the classic sound!")
+    print("="*70 + "\n")
+    
+    return score_data
+
+
+# ============================================================================
+# STATION 4: EXECUTION
+# ============================================================================
+
+if __name__ == '__main__':
+    from project_template import run_pipeline_from_file
+    run_pipeline_from_file(__file__)

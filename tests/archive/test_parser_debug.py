@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Debug script to test the parser and see what it extracts."""
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
+
 from lilypond_parser import parse_lilypond_to_data
 import json
 
