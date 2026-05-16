@@ -313,7 +313,7 @@ THEORY_RULE_CATALOG: Dict[str, Dict[str, str]] = {
     },
     "vertical_consonance": {
         "feature": "consonance_ratio",
-        "description": "Prefer consonant melody-harmony vertical intervals.",
+        "description": "Use consonance as a theory-valid harmonic option-space signal, not a fixed harmonic preset.",
         "target": "consonance_ratio >= 0.60",
     },
     "cadential_closure": {
@@ -334,12 +334,10 @@ THEORY_RULE_CATALOG: Dict[str, Dict[str, str]] = {
 }
 
 
-def evaluate_theory_penalties(features: Dict[str, float]) -> Dict[str, float]:
+def evaluate_melody_penalties(features: Dict[str, float]) -> Dict[str, float]:
     penalties = {
         "excessive_leaps": max(0.0, features["leap_ratio"] - 0.25),
         "insufficient_stepwise_motion": max(0.0, 0.45 - features["stepwise_motion_ratio"]),
-        "weak_vertical_consonance": max(0.0, 0.60 - features["consonance_ratio"]),
-        "weak_cadence": max(0.0, 1.0 - features["cadence_strength"]),
         "low_rhythmic_variety": max(0.0, 0.25 - features["rhythmic_variety"]),
         "low_rhythmic_stability": max(0.0, 0.50 - features["rhythmic_stability"]),
         "poor_tonal_fit": max(0.0, 0.75 - features["tonal_center_fit"]),
@@ -348,15 +346,25 @@ def evaluate_theory_penalties(features: Dict[str, float]) -> Dict[str, float]:
     return {k: min(1.0, v) for k, v in penalties.items()}
 
 
+def evaluate_harmony_option_penalties(features: Dict[str, float]) -> Dict[str, float]:
+    penalties = {
+        "weak_vertical_consonance": max(0.0, 0.60 - features["consonance_ratio"]),
+        "weak_cadence": max(0.0, 1.0 - features["cadence_strength"]),
+    }
+    return {k: min(1.0, v) for k, v in penalties.items()}
+
+
 # ==============================
 # Cost-based model
 # ==============================
 DEFAULT_COST_MODEL = {
+    "melody_quality_weight": 1.8,
+    "harmony_option_weight": 0.35,
     "weights": {
         "excessive_leaps": 1.1,
         "insufficient_stepwise_motion": 0.8,
-        "weak_vertical_consonance": 1.4,
-        "weak_cadence": 1.2,
+        "weak_vertical_consonance": 0.8,
+        "weak_cadence": 0.7,
         "low_rhythmic_variety": 0.7,
         "low_rhythmic_stability": 0.6,
         "poor_tonal_fit": 1.3,
@@ -366,6 +374,9 @@ DEFAULT_COST_MODEL = {
     },
     "hard_constraints": {
         "max_consecutive_leaps": 2.0,
+    },
+    "option_space_constraints": {
+        "strict": False,
         "min_consonance_ratio": 0.40,
     },
     "hard_violation_cost": 100.0,
@@ -398,19 +409,38 @@ def score_candidate(
     model: Dict,
 ) -> Dict:
     features = extract_theory_features(candidate_melody, harmony)
-    penalties = evaluate_theory_penalties(features)
-    penalties["complexity_penalty"] = _complexity_penalty(candidate_melody)
-    penalties["novelty_penalty"] = _novelty_penalty(candidate_melody, source_melody)
+    melody_penalties = evaluate_melody_penalties(features)
+    harmony_option_penalties = evaluate_harmony_option_penalties(features)
+    auxiliary_penalties = {
+        "complexity_penalty": _complexity_penalty(candidate_melody),
+        "novelty_penalty": _novelty_penalty(candidate_melody, source_melody),
+    }
 
     hard_violations = []
     if features["max_consecutive_leaps"] > model["hard_constraints"]["max_consecutive_leaps"]:
         hard_violations.append("max_consecutive_leaps")
-    if features["consonance_ratio"] < model["hard_constraints"]["min_consonance_ratio"]:
-        hard_violations.append("min_consonance_ratio")
 
-    weighted_cost = 0.0
-    for k, v in penalties.items():
-        weighted_cost += model["weights"].get(k, 1.0) * min(1.0, max(0.0, v))
+    option_constraints = model.get("option_space_constraints", {})
+    if option_constraints.get("strict") and features["consonance_ratio"] < option_constraints.get("min_consonance_ratio", 0.40):
+        hard_violations.append("option_space_min_consonance_ratio")
+
+    melody_cost = 0.0
+    for k, v in melody_penalties.items():
+        melody_cost += model["weights"].get(k, 1.0) * min(1.0, max(0.0, v))
+
+    harmony_option_cost = 0.0
+    for k, v in harmony_option_penalties.items():
+        harmony_option_cost += model["weights"].get(k, 1.0) * min(1.0, max(0.0, v))
+
+    auxiliary_cost = 0.0
+    for k, v in auxiliary_penalties.items():
+        auxiliary_cost += model["weights"].get(k, 1.0) * min(1.0, max(0.0, v))
+
+    weighted_cost = (
+        model.get("melody_quality_weight", 1.0) * melody_cost
+        + model.get("harmony_option_weight", 0.5) * harmony_option_cost
+        + auxiliary_cost
+    )
 
     if hard_violations:
         weighted_cost += model["hard_violation_cost"]
@@ -418,7 +448,14 @@ def score_candidate(
     return {
         "total_cost": weighted_cost,
         "features": features,
-        "penalties": penalties,
+        "penalties": {
+            **melody_penalties,
+            **harmony_option_penalties,
+            **auxiliary_penalties,
+        },
+        "melody_cost": melody_cost,
+        "harmony_option_cost": harmony_option_cost,
+        "auxiliary_cost": auxiliary_cost,
         "hard_violations": hard_violations,
     }
 
@@ -426,6 +463,7 @@ def score_candidate(
 # ==============================
 # Optimization strategies
 # ==============================
+# Theory-valid melodic transformation option space (not harmonic presets).
 TRANSFORMATION_INTERVALS = ["P1", "m2", "M2", "m3", "M3", "P4", "P5", "-m2", "-M2", "-m3"]
 
 
@@ -587,6 +625,10 @@ def run_benchmark(model: Optional[Dict] = None) -> List[Dict]:
                 "baseline_cost": round(baseline["total_cost"], 4),
                 "optimized_cost": round(optimized["score"]["total_cost"], 4),
                 "improvement": round(baseline["total_cost"] - optimized["score"]["total_cost"], 4),
+                "baseline_melody_cost": round(baseline["melody_cost"], 4),
+                "optimized_melody_cost": round(optimized["score"]["melody_cost"], 4),
+                "baseline_harmony_option_cost": round(baseline["harmony_option_cost"], 4),
+                "optimized_harmony_option_cost": round(optimized["score"]["harmony_option_cost"], 4),
                 "strategy": optimized["strategy"],
                 "label": optimized["label"],
                 "hard_violations": optimized["score"]["hard_violations"],
@@ -606,6 +648,8 @@ def print_evaluation_report(rows: List[Dict]):
         print(
             f"- {row['name']}: baseline={row['baseline_cost']}, "
             f"optimized={row['optimized_cost']}, improvement={row['improvement']}, "
+            f"melody_cost={row['baseline_melody_cost']}->{row['optimized_melody_cost']}, "
+            f"harmony_option_cost={row['baseline_harmony_option_cost']}->{row['optimized_harmony_option_cost']}, "
             f"strategy={row['strategy']}, label={row['label']}, "
             f"hard_violations={row['hard_violations']}"
         )
