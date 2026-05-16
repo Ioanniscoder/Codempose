@@ -360,6 +360,7 @@ def evaluate_harmony_option_penalties(features: Dict[str, float]) -> Dict[str, f
 DEFAULT_COST_MODEL = {
     "melody_quality_weight": 1.8,
     "harmony_option_weight": 0.35,
+    "lilt_weight": 0.8,
     "weights": {
         "excessive_leaps": 1.1,
         "insufficient_stepwise_motion": 0.8,
@@ -378,6 +379,19 @@ DEFAULT_COST_MODEL = {
     "option_space_constraints": {
         "strict": False,
         "min_consonance_ratio": 0.40,
+    },
+    "lilt": {
+        "enabled": True,
+        "preset_budgets": {
+            "continuity": 0.55,
+            "known_contrast": 0.30,
+            "odd_contrast": 0.12,
+        },
+        "realized_development_weight": 0.55,
+        "sync_gain": 1.0,
+        "odd_contrast_tolerance": 0.06,
+        "known_budget_headroom": 0.20,
+        "odd_budget_headroom": 0.18,
     },
     "hard_violation_cost": 100.0,
 }
@@ -402,6 +416,133 @@ def _novelty_penalty(candidate: music21.stream.Part, source: music21.stream.Part
     return min(1.0, normalized)
 
 
+def _interval_profile(note_midis: List[int]) -> List[int]:
+    if len(note_midis) <= 1:
+        return []
+    return [note_midis[i] - note_midis[i - 1] for i in range(1, len(note_midis))]
+
+
+def _motif_divergence(candidate: music21.stream.Part, source: music21.stream.Part) -> float:
+    c_midis = [n.pitch.midi for n in candidate.flatten().notes if isinstance(n, music21.note.Note)]
+    s_midis = [n.pitch.midi for n in source.flatten().notes if isinstance(n, music21.note.Note)]
+    c_intervals = _interval_profile(c_midis)
+    s_intervals = _interval_profile(s_midis)
+    if not c_intervals or not s_intervals:
+        return 0.0
+    n = min(len(c_intervals), len(s_intervals))
+    avg_abs_diff = sum(abs(c_intervals[i] - s_intervals[i]) for i in range(n)) / n
+    return min(1.0, avg_abs_diff / 12.0)
+
+
+def _clamp01(value: float) -> float:
+    return min(1.0, max(0.0, value))
+
+
+def evaluate_lilt(
+    candidate_melody: music21.stream.Part,
+    source_melody: music21.stream.Part,
+    features: Dict[str, float],
+    novelty_penalty: float,
+    model: Dict,
+) -> Dict[str, float]:
+    lilt_cfg = model.get("lilt", {})
+    if not lilt_cfg.get("enabled", True):
+        return {
+            "lilt_penalty": 0.0,
+            "continuity_signal": 0.0,
+            "known_contrast_signal": 0.0,
+            "odd_contrast_signal": 0.0,
+            "synchronous_contrast": 0.0,
+            "lilt_extremity": 0.0,
+            "realized_development": 0.0,
+            "intended_known_budget": 0.0,
+            "intended_odd_budget": 0.0,
+            "effective_known_budget": 0.0,
+            "effective_odd_budget": 0.0,
+        }
+
+    budgets = lilt_cfg.get("preset_budgets", {})
+    intended_continuity = _clamp01(budgets.get("continuity", 0.55))
+    intended_known_budget = _clamp01(budgets.get("known_contrast", 0.30))
+    intended_odd_budget = _clamp01(budgets.get("odd_contrast", 0.12))
+    realized_weight = _clamp01(lilt_cfg.get("realized_development_weight", 0.55))
+
+    realized_development = _motif_divergence(candidate_melody, source_melody)
+    effective_known_budget = _clamp01(
+        intended_known_budget
+        + realized_weight * realized_development * _clamp01(lilt_cfg.get("known_budget_headroom", 0.20))
+    )
+    effective_odd_budget = _clamp01(
+        intended_odd_budget
+        + realized_weight * realized_development * _clamp01(lilt_cfg.get("odd_budget_headroom", 0.18))
+    )
+
+    continuity_signal = _clamp01(
+        (
+            features.get("stepwise_motion_ratio", 0.0)
+            + features.get("contour_coherence", 0.0)
+            + features.get("rhythmic_stability", 0.0)
+        )
+        / 3.0
+    )
+    known_contrast_signal = _clamp01(
+        (
+            novelty_penalty
+            + features.get("leap_ratio", 0.0)
+            + features.get("rhythmic_variety", 0.0)
+        )
+        / 3.0
+    )
+    odd_contrast_signal = _clamp01(
+        (
+            max(0.0, novelty_penalty - effective_known_budget)
+            + (1.0 - features.get("contour_coherence", 0.0))
+            + max(0.0, features.get("leap_ratio", 0.0) - 0.25)
+        )
+        / 3.0
+    )
+    synchronous_contrast = _clamp01(
+        (
+            known_contrast_signal
+            + odd_contrast_signal
+            + features.get("leap_ratio", 0.0)
+            + features.get("rhythmic_variety", 0.0)
+            + (1.0 - features.get("contour_coherence", 0.0))
+        )
+        / 5.0
+    )
+    lilt_extremity = _clamp01(synchronous_contrast * max(0.0, lilt_cfg.get("sync_gain", 1.0)))
+
+    continuity_target = _clamp01(intended_continuity - 0.35 * lilt_extremity)
+    continuity_penalty = max(0.0, continuity_target - continuity_signal)
+    known_contrast_penalty = abs(known_contrast_signal - effective_known_budget)
+    odd_limit = effective_odd_budget + _clamp01(lilt_cfg.get("odd_contrast_tolerance", 0.06))
+    odd_contrast_penalty = max(0.0, odd_contrast_signal - odd_limit)
+
+    observed_extremity = _clamp01((known_contrast_signal + odd_contrast_signal + (1.0 - continuity_signal)) / 3.0)
+    extremity_alignment_penalty = abs(observed_extremity - lilt_extremity)
+
+    lilt_penalty = _clamp01(
+        0.30 * continuity_penalty
+        + 0.25 * known_contrast_penalty
+        + 0.25 * odd_contrast_penalty
+        + 0.20 * extremity_alignment_penalty
+    )
+    return {
+        "lilt_penalty": lilt_penalty,
+        "continuity_signal": continuity_signal,
+        "known_contrast_signal": known_contrast_signal,
+        "odd_contrast_signal": odd_contrast_signal,
+        "synchronous_contrast": synchronous_contrast,
+        "lilt_extremity": lilt_extremity,
+        "realized_development": realized_development,
+        "intended_known_budget": intended_known_budget,
+        "intended_odd_budget": intended_odd_budget,
+        "effective_known_budget": effective_known_budget,
+        "effective_odd_budget": effective_odd_budget,
+    }
+
+
 def score_candidate(
     candidate_melody: music21.stream.Part,
     source_melody: music21.stream.Part,
@@ -415,6 +556,13 @@ def score_candidate(
         "complexity_penalty": _complexity_penalty(candidate_melody),
         "novelty_penalty": _novelty_penalty(candidate_melody, source_melody),
     }
+    lilt_metrics = evaluate_lilt(
+        candidate_melody=candidate_melody,
+        source_melody=source_melody,
+        features=features,
+        novelty_penalty=auxiliary_penalties["novelty_penalty"],
+        model=model,
+    )
 
     hard_violations = []
     if features["max_consecutive_leaps"] > model["hard_constraints"]["max_consecutive_leaps"]:
@@ -440,6 +588,7 @@ def score_candidate(
         model.get("melody_quality_weight", 1.0) * melody_cost
         + model.get("harmony_option_weight", 0.5) * harmony_option_cost
         + auxiliary_cost
+        + model.get("lilt_weight", 0.0) * lilt_metrics["lilt_penalty"]
     )
 
     if hard_violations:
@@ -452,10 +601,13 @@ def score_candidate(
             **melody_penalties,
             **harmony_option_penalties,
             **auxiliary_penalties,
+            "lilt_penalty": lilt_metrics["lilt_penalty"],
         },
         "melody_cost": melody_cost,
         "harmony_option_cost": harmony_option_cost,
         "auxiliary_cost": auxiliary_cost,
+        "lilt_cost": model.get("lilt_weight", 0.0) * lilt_metrics["lilt_penalty"],
+        "lilt": lilt_metrics,
         "hard_violations": hard_violations,
     }
 
@@ -605,6 +757,21 @@ BENCHMARK_SNIPPETS = [
         "melody": r"\relative c' { e4 f g a g f e d }",
         "harmony": "<c e g>2 <g b d>2 <c e g>1",
     },
+    {
+        "name": "sync_low_continuity_bias",
+        "melody": r"\relative c' { c4 d e f g a g f }",
+        "harmony": "<c e g>2 <c e g>2 <f a c>2 <c e g>2",
+    },
+    {
+        "name": "sync_medium_mixed",
+        "melody": r"\relative c' { c4 e d f e g f a }",
+        "harmony": "<c e g>2 <f a c>2 <g b d>2 <c e g>2",
+    },
+    {
+        "name": "sync_high_odd_contrast",
+        "melody": r"\relative c' { c4 a' f d' b g' e c' }",
+        "harmony": "<c e g>1 <a c e>1",
+    },
 ]
 
 
@@ -629,6 +796,12 @@ def run_benchmark(model: Optional[Dict] = None) -> List[Dict]:
                 "optimized_melody_cost": round(optimized["score"]["melody_cost"], 4),
                 "baseline_harmony_option_cost": round(baseline["harmony_option_cost"], 4),
                 "optimized_harmony_option_cost": round(optimized["score"]["harmony_option_cost"], 4),
+                "baseline_lilt_cost": round(baseline.get("lilt_cost", 0.0), 4),
+                "optimized_lilt_cost": round(optimized["score"].get("lilt_cost", 0.0), 4),
+                "optimized_sync_contrast": round(optimized["score"].get("lilt", {}).get("synchronous_contrast", 0.0), 4),
+                "optimized_lilt_extremity": round(optimized["score"].get("lilt", {}).get("lilt_extremity", 0.0), 4),
+                "optimized_known_budget": round(optimized["score"].get("lilt", {}).get("effective_known_budget", 0.0), 4),
+                "optimized_odd_budget": round(optimized["score"].get("lilt", {}).get("effective_odd_budget", 0.0), 4),
                 "strategy": optimized["strategy"],
                 "label": optimized["label"],
                 "hard_violations": optimized["score"]["hard_violations"],
@@ -650,6 +823,9 @@ def print_evaluation_report(rows: List[Dict]):
             f"optimized={row['optimized_cost']}, improvement={row['improvement']}, "
             f"melody_cost={row['baseline_melody_cost']}->{row['optimized_melody_cost']}, "
             f"harmony_option_cost={row['baseline_harmony_option_cost']}->{row['optimized_harmony_option_cost']}, "
+            f"lilt_cost={row['baseline_lilt_cost']}->{row['optimized_lilt_cost']}, "
+            f"sync_contrast={row['optimized_sync_contrast']}, lilt_extremity={row['optimized_lilt_extremity']}, "
+            f"known_budget={row['optimized_known_budget']}, odd_budget={row['optimized_odd_budget']}, "
             f"strategy={row['strategy']}, label={row['label']}, "
             f"hard_violations={row['hard_violations']}"
         )
